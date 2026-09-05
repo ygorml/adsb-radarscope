@@ -1,0 +1,21 @@
+# Test harness.
+#
+# This is the only part of the repository with dependencies. The suites are
+# versioned; what npm generates is not.
+#
+# package-lock.json IS committed on purpose: the harness asserts on real
+# behaviour, so an unpinned jsdom could change a result without any change to
+# the application under test.
+
+/node_modules/
+
+# npm and node output
+npm-debug.log*
+yarn-error.log*
+.npm/
+*.tgz
+
+# Coverage or profiling output, should either ever be enabled here
+/coverage/
+*.cpuprofile
+*.heapsnapshot
