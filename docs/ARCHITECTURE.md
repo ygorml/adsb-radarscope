@@ -2,7 +2,7 @@
 
 How ADSB Radarscope is put together, for anyone modifying it. For settings,
 see [CONFIG_EXAMPLE.md](CONFIG_EXAMPLE.md); for installation and use, see
-[README.md](README.md).
+[README.md](../README.md).
 
 ## Contents
 
@@ -414,7 +414,7 @@ covering the moving receiver and every previously-inert setting, 8 multi-source
 resilience checks, and a reproduction suite for the twelve defects found in the
 `0.0.1` audit — all of which now fail to reproduce.
 
-Those suites live in [`test/`](test/README.md) and run with `npm test`. If you
+Those suites live in [`test/`](../test/README.md) and run with `npm test`. If you
 change anything described in this document, they are how you find out whether
 the description is still true.
 

@@ -75,7 +75,7 @@ and the aircraft feed.
       },
 
   Every other setting has a working default, and most are also editable from
-  the settings panel (press S). See CONFIG_EXAMPLE.md for the full reference.
+  the settings panel (press S). See docs/CONFIG_EXAMPLE.md for the full reference.
 
   NO RECEIVER YET?  Skip the edits above and use the demo configuration:
 
@@ -222,7 +222,7 @@ TROUBLESHOOTING
   Poor frame rate
       In config.js, set CANVAS_RENDER_THROTTLE_MS to 32 and MAX_TRAIL_LENGTH
       to 25. Turn runways off in the UI - they are the heaviest layer - and
-      prefer a simple scope theme. CONFIG_EXAMPLE.md has tuning recipes.
+      prefer a simple scope theme. docs/CONFIG_EXAMPLE.md has tuning recipes.
 
   No emergency alert sound
       The AudioContext is created on the first click anywhere in the page,
@@ -246,10 +246,10 @@ TROUBLESHOOTING
 FURTHER READING
 ---------------
 
-  README.md            features, usage, keyboard shortcuts
-  CONFIG_EXAMPLE.md    full configuration reference and tuning recipes
-  ARCHITECTURE.md      how the code is organised, for modifying it
-  KNOWN_ISSUES.md      audit record: what was broken, and how it was fixed
+  ../README.md              features, usage, keyboard shortcuts
+  CONFIG_EXAMPLE.md         full configuration reference and tuning recipes
+  ARCHITECTURE.md           how the code is organised, for modifying it
+  KNOWN_ISSUES.md           audit record: what was broken, and how it was fixed
   POSITION             moving-receiver position file, documented inline
   config.demo.js       ready-to-run test configuration
   tools/demo-feed.js   synthetic aircraft feed, for looking at the scope

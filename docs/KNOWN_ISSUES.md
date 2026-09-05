@@ -214,7 +214,7 @@ booting the real `index.html`, `config.js` and `app.js` in a DOM environment
 `requestAnimationFrame` stubbed, then driving frames and feeding synthetic data.
 
 Four suites are used, all against unmodified sources. They live in
-[`test/`](test/README.md) and run with `cd test && npm install && npm test`:
+[`test/`](../test/README.md) and run with `cd test && npm install && npm test`:
 
 - **`run.js` — 31 boot-and-render checks:** startup, polling, CSV parsing,
   sweep-gated promotion, trails, the static cache, every panel, emergency

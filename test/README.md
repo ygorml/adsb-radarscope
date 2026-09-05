@@ -43,7 +43,7 @@ Each suite exits non-zero on failure, so they work as a CI gate.
 |---|---|
 | `run.js` | 31 checks: startup, polling, CSV parsing, sweep-gated promotion, trails, the static-layer cache, every panel, emergency handling, classification, interaction, export, persistence, teardown |
 | `features.js` | 46 checks: the moving receiver end to end, every accepted `POSITION` format and its rejection cases, each previously-inert `CONFIG` flag, each newly implemented UI feature |
-| `bugs.js` | Reproduction attempts for the defects in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md). These *should* all report "not reproduced" — each one is a regression guard |
+| `bugs.js` | Reproduction attempts for the defects in [KNOWN_ISSUES.md](../docs/KNOWN_ISSUES.md). These *should* all report "not reproduced" — each one is a regression guard |
 | `multisource.js` | The two critical data-fetch defects: a dead source must not stop the healthy ones, and failed requests must not leak unhandled rejections |
 
 ## How it works

@@ -74,7 +74,7 @@ A real-time web-based aircraft tracking application that visualizes ADS-B (Autom
    - Open `config.js` in a text editor
    - Update `DEFAULT_HOME_LAT` and `DEFAULT_HOME_LON` with your coordinates
    - Update `DEFAULT_TAR1090_URL` with your data source URL
-   - See `CONFIG_EXAMPLE.md` for detailed configuration options
+   - See `docs/CONFIG_EXAMPLE.md` for detailed configuration options
 
 3. **Start a Web Server**
 
@@ -124,7 +124,7 @@ A real-time web-based aircraft tracking application that visualizes ADS-B (Autom
    - Open `config.js` in a text editor
    - Update `DEFAULT_HOME_LAT` and `DEFAULT_HOME_LON` with your coordinates
    - Update `DEFAULT_TAR1090_URL` with your data source URL
-   - See `CONFIG_EXAMPLE.md` for detailed configuration options
+   - See `docs/CONFIG_EXAMPLE.md` for detailed configuration options
 
 3. **Start a Web Server**
    Choose one of the server options above (Python, Node.js, or PHP)
@@ -182,7 +182,7 @@ DEFAULT_TAR1090_URL: 'https://your-server.com/tar1090/data/aircraft.json'
 
 ### Optional Settings
 
-See `CONFIG_EXAMPLE.md` for comprehensive configuration documentation including:
+See `docs/CONFIG_EXAMPLE.md` for comprehensive configuration documentation including:
 - Performance tuning
 - Trail customization
 - Display settings
@@ -261,10 +261,12 @@ adsb-radarscope/
 ├── tools/               # demo-feed.js (aircraft), ship-sim.js (receiver position)
 ├── assets/              # Screenshots used by this file
 ├── test/                # jsdom test harness (not needed to run the app)
+├── docs/
+│   ├── INSTALL.txt          # Installation guide
+│   ├── CONFIG_EXAMPLE.md    # Configuration reference and tuning recipes
+│   ├── ARCHITECTURE.md      # How the code is organised, for modifying it
+│   └── KNOWN_ISSUES.md      # Audit record: defects found, and how each was fixed
 ├── README.md            # This file
-├── CONFIG_EXAMPLE.md    # Configuration reference and tuning recipes
-├── ARCHITECTURE.md      # How the code is organised, for modifying it
-├── INSTALL.txt          # Installation guide
 └── LICENSE              # License file
 ```
 
@@ -272,10 +274,10 @@ adsb-radarscope/
 
 | Document | Covers |
 |---|---|
-| [INSTALL.txt](INSTALL.txt) | Setup, first run, troubleshooting |
-| [CONFIG_EXAMPLE.md](CONFIG_EXAMPLE.md) | Every `config.js` setting, adding themes, tuning recipes |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Module layout, the frame cycle, extension points |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Audit record: defects found, and how each was fixed |
+| [INSTALL.txt](docs/INSTALL.txt) | Setup, first run, troubleshooting |
+| [CONFIG_EXAMPLE.md](docs/CONFIG_EXAMPLE.md) | Every `config.js` setting, adding themes, tuning recipes |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module layout, the frame cycle, extension points |
+| [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | Audit record: defects found, and how each was fixed |
 | [test/README.md](test/README.md) | Running the test harness, and how it works |
 
 `app.js` and `config.js` carry JSDoc throughout, so an editor with JavaScript
@@ -284,9 +286,13 @@ language support will surface parameter and return types inline.
 ## Looking at it without a receiver
 
 `config.demo.js` is a complete test configuration: a receiver in Guanabara Bay,
-Rio de Janeiro, under way at **3 knots on course 180°**, reading the airport and
-navaid CSVs that ship in `data/`. Santos Dumont is 2 nm away and Galeão 7 nm, so
-the airport and runway layers have something to draw.
+Rio de Janeiro, reading the airport and navaid CSVs that ship in `data/`. Santos
+Dumont is 2 nm away and Galeão 7 nm, so the airport and runway layers have
+something to draw.
+
+Without a generator running, the scope sits on the position in the shipped
+`POSITION` file — 3 knots on course 180, a resting default. Start
+`tools/ship-sim.js` and the vessel gets under way at 8 knots.
 
 ```bash
 cp config.demo.js config.local.js     # index.html applies it over config.js
@@ -337,7 +343,7 @@ npm test        # 4 suites, ~70 s
 
 91 checks across boot and render, the moving receiver, every configuration
 switch, and regression guards for each defect in
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md). See [test/README.md](test/README.md).
+[KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md). See [test/README.md](test/README.md).
 
 Nothing under `test/` ships with a release. The harness is the only part of the
 repository with dependencies, so it carries its own `package.json` and
@@ -507,7 +513,7 @@ Compatible with tar1090/dump1090/PiAware JSON format:
 - Debounced `localStorage` writes and window resize
 
 Every switch under `CONFIG.PERFORMANCE` is wired to real behaviour in this
-release; see [CONFIG_EXAMPLE.md](CONFIG_EXAMPLE.md#performance-tuning) for what
+release; see [CONFIG_EXAMPLE.md](docs/CONFIG_EXAMPLE.md#performance-tuning) for what
 each one does and when turning it off is diagnostic.
 
 ## License
@@ -520,7 +526,7 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 - **Issues**: Report bugs via GitHub Issues
 - **Discussions**: Feature requests and questions via GitHub Discussions
-- **Documentation**: See CONFIG_EXAMPLE.md for detailed configuration
+- **Documentation**: See [docs/](docs/) — configuration, architecture, install and the audit record
 
 ## Changelog
 
@@ -548,7 +554,7 @@ but the source did not do:
   itself and the setting could never have had an effect
 
 **Defects fixed** (all twelve from the v0.0.1 audit; see
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md)):
+[KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)):
 
 - One unreachable data source no longer stops all polling; `CONN: Partial`
   works and warnings name the correct feed
@@ -571,11 +577,11 @@ that is available.
 - Fixed `config.js` failing to parse: the `00.0000` home-position placeholder
   is a legacy octal literal, so the browser rejected the whole file
 - Full JSDoc coverage across `app.js` and `config.js`
-- Added `CONFIG_EXAMPLE.md`, `ARCHITECTURE.md` and `INSTALL.txt`
+- Added `docs/CONFIG_EXAMPLE.md`, `docs/ARCHITECTURE.md` and `docs/INSTALL.txt`
   (referenced by earlier releases but never shipped)
 - Corrected the keyboard-shortcut list, theme counts and settings-panel
   description to match the source
-- See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for defects found while auditing
+- See [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) for defects found while auditing
 
 Inherited from upstream `0.9.2`:
 - 51 scope themes and 35 UI themes
