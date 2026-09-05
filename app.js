@@ -409,8 +409,8 @@ if (window.tailwind) {
                 CSVDataManager.getNavaidsInRange(state.homeLat, state.homeLon, state.maxRangeNm) : [];
             
             // Draw airports
-            if (state.showAirports && airports.length > 0) {
-                this.drawAirports(ctx, airports, cx, cy, radius);
+            if (state.showAirports && airportData.length > 0) {
+                this.drawAirports(ctx, airportData, cx, cy, radius);
             }
             
             // Draw navaids
@@ -1129,13 +1129,17 @@ if (window.tailwind) {
                 const fetchPromises = enabledSources.map(source => this.fetchFromSource(source));
                 const results = await Promise.allSettled(fetchPromises);
                 
-                const successfulData = results
-                    .filter(r => r.status === 'fulfilled')
+                // Pair each result with its own source before filtering, so the
+                // two lists cannot drift apart.
+                const settled = results.map((r, i) => ({ ...r, source: enabledSources[i] }));
+
+                const successfulData = settled
+                    .filter(r => r.status === 'fulfilled' && r.value && typeof r.value === 'object')
                     .map(r => r.value);
                 
-                const failedSources = results
-                    .filter(r => r.status === 'rejected')
-                    .map((r, i) => ({ source: enabledSources[i], error: r.reason }));
+                const failedSources = settled
+                    .filter(r => r.status === 'rejected' || !r.value || typeof r.value !== 'object')
+                    .map(r => ({ source: r.source, error: r.reason || new Error('Empty response') }));
                 
                 if (successfulData.length > 0) {
                     const mergedData = this.mergeAircraftData(successfulData);
@@ -1145,24 +1149,48 @@ if (window.tailwind) {
                     state.lastDataUpdate = Date.now();
                 } else {
                     state.connectionStatus = "Error - All sources failed";
-                    failedSources.forEach(failed => {
-                        ErrorBoundary.showWarning(`Data source "${failed.source.name}" failed: ${failed.error.message}`);
-                    });
                 }
+
+                // Warn once per source per outage rather than once per poll.
+                failedSources.forEach(failed => {
+                    const key = failed.source.url;
+                    if (!state.reportedSourceFailures.has(key)) {
+                        state.reportedSourceFailures.add(key);
+                        ErrorBoundary.showWarning(`Data source "${failed.source.name}" failed: ${failed.error.message}`);
+                    }
+                });
+                successfulData.forEach(d => {
+                    const src = enabledSources.find(e => e.name === d.source);
+                    if (src) state.reportedSourceFailures.delete(src.url);
+                });
             } catch (error) {
                 ErrorBoundary.handleError(error, 'Data Fetch');
                 state.connectionStatus = "Error";
             }
         },
         
+        /**
+         * Fetches one source, retrying up to {@link CONFIG.MAX_RETRY_ATTEMPTS}
+         * times with exponential backoff from
+         * {@link CONFIG.INITIAL_RETRY_DELAY_MS}.
+         *
+         * The retry budget is per call, not per session: `state.retryAttempts`
+         * records how many attempts the last poll needed, but a source that
+         * recovers is retried normally on the next poll rather than being
+         * written off for the life of the page.
+         * @param {{url: string, name: string, enabled: boolean}} source Feed to read.
+         * @returns {Promise<Object>} Payload tagged with the source name.
+         * @throws {Error} If the URL is invalid or every attempt fails.
+         */
         async fetchFromSource(source) {
             if (!URLValidator.isValidDataSourceUrl(source.url)) {
                 throw new Error(`Invalid URL: ${source.url}`);
             }
             
             const retryKey = source.url;
-            let attempts = state.retryAttempts[retryKey] || 0;
-            
+            let attempts = 0;
+            let lastError = new Error(`No attempt was made for ${source.name}`);
+
             while (attempts < CONFIG.MAX_RETRY_ATTEMPTS) {
                 try {
                     const response = await networkPool.fetch(source.url);
@@ -1176,24 +1204,34 @@ if (window.tailwind) {
                     return { ...data, source: source.name };
                 } catch (error) {
                     attempts++;
+                    lastError = error;
                     state.retryAttempts[retryKey] = attempts;
                     
                     if (attempts < CONFIG.MAX_RETRY_ATTEMPTS) {
                         const delay = CONFIG.INITIAL_RETRY_DELAY_MS * Math.pow(2, attempts - 1);
                         await new Promise(resolve => setTimeout(resolve, delay));
-                    } else {
-                        console.error(`Failed to fetch from ${source.name} after ${attempts} attempts:`, error);
-                        throw error;
                     }
                 }
             }
+
+            // The budget is per call, so a source that comes back later recovers
+            // on its next poll instead of being written off for the whole session.
+            console.error(`Failed to fetch from ${source.name} after ${attempts} attempts:`, lastError);
+            throw lastError;
         },
         
+        /**
+         * Merges payloads from several feeds, keeping the first sighting of each
+         * hex and tagging it with the source it came from.
+         * @param {Array<Object>} dataArrays One payload per successful source.
+         * @returns {{aircraft: Array<AircraftMessage>, messages: number}} Merged set.
+         */
         mergeAircraftData(dataArrays) {
             const merged = { aircraft: [], messages: 0 };
             const seenHexes = new Set();
             
             for (const data of dataArrays) {
+                if (!data || typeof data !== 'object') continue;
                 merged.messages += data.messages || 0;
                 for (const ac of (data.aircraft || [])) {
                     if (!seenHexes.has(ac.hex)) {
@@ -1222,8 +1260,11 @@ if (window.tailwind) {
                 this.updateStatistics(ac);
                 
                 if (CONFIG.EMERGENCY_SQUAWKS.includes(ac.squawk)) {
-                    UIManager.createEmergencyAlert(ac);
-                    SoundManager.playEmergencyAlert();
+                    // Both are de-duplicated per aircraft: one banner and one
+                    // tone per emergency, not one per poll.
+                    if (UIManager.createEmergencyAlert(ac)) {
+                        SoundManager.playEmergencyAlert();
+                    }
                 }
             }
             
@@ -2146,9 +2187,21 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Raises a visual emergency banner for an aircraft squawking 7500/7600/
+         * 7700. De-duplicated through `state.activeAlerts`, so one aircraft yields
+         * one banner however many messages arrive; it clears after
+         * {@link CONFIG.ALERT_DURATION_MS}.
+         *
+         * The return value is what gates the alert tone, so the sound is
+         * de-duplicated on exactly the same decision as the banner.
+         * @param {AircraftMessage} aircraft Aircraft in distress.
+         * @returns {boolean} True if this raised a new banner.
+         */
         createEmergencyAlert(aircraft) {
-            const hex = aircraft.hex;
-            if (state.activeAlerts.has(hex)) return;
+            // Normalised so the key matches the one processAircraftData indexes by.
+            const hex = String(aircraft.hex || '').trim().toUpperCase();
+            if (!hex || state.activeAlerts.has(hex)) return false;
             
             state.activeAlerts.add(hex);
             const alertDiv = document.createElement('div');
@@ -2161,11 +2214,20 @@ if (window.tailwind) {
                 state.activeAlerts.delete(hex);
             }, CONFIG.ALERT_DURATION_MS);
             state.timeouts.push(timeout);
+            return true;
         }
     };
 
-    // Enhanced Export Manager
+    /**
+     * Download helpers for the current scope contents: CSV, KML and a JSON
+     * statistics snapshot.
+     * @namespace ExportManager
+     */
     const ExportManager = {
+        /**
+         * Exports the tracked aircraft as CSV.
+         * @returns {void}
+         */
         exportCSV() {
             const data = Object.values(state.displayedAircraft);
             const headers = ['hex', 'flight', 'lat', 'lon', 'alt_baro', 'gs', 'track', 'squawk', 'data_source'];
@@ -3106,7 +3168,6 @@ if (window.tailwind) {
                 // DEBUG
                 // Calculate FPS once per second
                 const now = performance.now();
-                state.frameCount++;
                 if (now - state.lastFpsUpdateTime > 1000) {
                     state.fps = state.frameCount;
                     state.frameCount = 0;
@@ -3192,7 +3253,7 @@ if (window.tailwind) {
                     state.soundEnabled = settings.soundEnabled === true;
                     state.showAirports = settings.showAirports === true;
                     state.showNavaids = settings.showNavaids === true;
-                    state.showRunways = settings.showRunways !== true; // Default to true
+                    state.showRunways = settings.showRunways !== false; // Default to true
 
                     state.dataSources = settings.dataSources || state.dataSources;
                     state.minRunwayLength = settings.minRunwayLength || CONFIG.AIRPORT_DISPLAY.MIN_RUNWAY_LENGTH_FT;
