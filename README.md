@@ -259,6 +259,7 @@ adsb-radarscope/
 ├── POSITION             # Receiver position, for a moving install
 ├── config.demo.js       # Ready-to-run test configuration
 ├── tools/               # demo-feed.js (aircraft), ship-sim.js (receiver position)
+│   └── README.md
 ├── assets/              # Screenshots used by this file
 ├── test/                # jsdom test harness (not needed to run the app)
 ├── docs/
@@ -279,6 +280,7 @@ adsb-radarscope/
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module layout, the frame cycle, extension points |
 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | Audit record: defects found, and how each was fixed |
 | [test/README.md](test/README.md) | Running the test harness, and how it works |
+| [tools/README.md](tools/README.md) | The demo feed and ship simulator, and their flags |
 
 `app.js` and `config.js` carry JSDoc throughout, so an editor with JavaScript
 language support will surface parameter and return types inline.
@@ -328,6 +330,51 @@ navigable axis of the bay, and `--check` tests every position of a long transit
 against an independent water polygon that does not share the route's
 assumptions. It is good enough to exercise the scope; check the waypoints
 against a chart before trusting it for anything else.
+
+See [tools/README.md](tools/README.md) for both generators in full.
+
+## Seeing what the scope is doing
+
+Three readouts, useful whether you are running the demo or a real receiver.
+
+**The debug overlay — press `I`.** Draws in the top-left corner:
+
+```
+FPS: 58
+Mem: 34.2MB / 51.0MB
+Tracked: 8
+```
+
+`FPS` counts frames actually drawn. `Mem` needs `performance.memory`, which only
+Chrome and Edge provide — Firefox and Safari show `Mem: N/A`. `Tracked` is how
+many aircraft the sweep is currently painting, which is not the same as how many
+the feed sent: a target only appears once the sweep has passed over it.
+
+**The status bar**, along the bottom of the scope, is the fastest way to tell
+where a problem is:
+
+```
+RANGE: 40 NM | CONN: OK | TRACKED: 8 | FILTER: ALL | DATA: 9118A/11010N/12649R | UNDERWAY: -22.87803, -43.15593 180° 3.0kt
+```
+
+| Field | What it tells you |
+|---|---|
+| `CONN` | `OK`, `Partial (n failed)` when some feeds are down but others work, or `Error` |
+| `TRACKED` | Aircraft on the scope right now |
+| `DATA` | Airports / navaids / runways loaded. `0A/0N/0R` means `DATA_PATHS` is wrong |
+| `POS` | The configured home position |
+| `UNDERWAY` | Shown instead of `POS` while a POSITION file is driving the centre, with course and speed. Gains `(STALE)` if no fix has arrived for `STALE_AFTER_MS` |
+
+**The POSITION parser status**, in **Settings (`S`) → Moving Receiver**, reports
+the fix it read and which of the four formats matched:
+
+```
+-22.878029, -43.155934, 180°, 3.0 kt (KEY=VALUE)
+```
+
+or the read error instead. It is the first place to look when the scope is not
+following the file — it distinguishes "cannot fetch it" from "fetched it and
+could not parse it", which the status bar cannot.
 
 ## Testing
 
