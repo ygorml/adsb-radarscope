@@ -21,8 +21,8 @@ const CONFIG = {
     VERSION: '0.9.2.0837110925',
     
     // Home Position Settings
-    DEFAULT_HOME_LAT: 00.0000,
-    DEFAULT_HOME_LON: -00.0000,
+    DEFAULT_HOME_LAT: 0.0,
+    DEFAULT_HOME_LON: -0.0,
     DEFAULT_RANGE_NM: 50,
     
     // Data Source Settings
