@@ -23,7 +23,7 @@ and the aircraft feed.
 
   From a release archive:
 
-      unzip adsb-radarscope-v0.0.2.zip
+      unzip adsb-radarscope-v0.0.3.zip
       cd adsb-radarscope
 
   Or from GitHub:
@@ -138,13 +138,19 @@ and the aircraft feed.
   If the receiver is aboard a ship or a vehicle, the scope centre can follow a
   file instead of a fixed coordinate.
 
-  a. Enable it, either in config.js:
+  a. Tell it what the receiver is mounted on, either in config.js:
 
-         POSITION_FILE: { ENABLED: true, PATH: 'POSITION', ... }
+         RECEIVER_TYPE: 'ship',      // 'static' | 'car' | 'ship'
 
-     or in Settings (S) > Moving Receiver, which also sets the poll interval
-     and the movement threshold. While tracking is on, the Home Position
-     fields are read-only - the file wins.
+     or in Settings (S) > Receiver, which also sets the POSITION file path,
+     the poll interval and the movement threshold.
+
+     Choosing 'car' or 'ship' is what starts tracking - there is no separate
+     switch. The two differ only in the marker drawn at the centre of the
+     scope: a car body or a ship's hull, turned to course over ground. A
+     'static' receiver gets a mast with radiating arcs and never reads the
+     file. While a mobile type is selected the Home Position fields are
+     read-only - the file wins.
 
   b. Have your GPS source rewrite that file. Any of these work:
 
@@ -179,7 +185,7 @@ and the aircraft feed.
 
   Movement below MIN_MOVE_NM (default ~9 m) is ignored, so GPS jitter at anchor
   does not rebuild the display continuously. If no fix arrives for 30 seconds
-  the status bar shows (STALE) and the own-ship marker dims to the emergency
+  the status bar shows (STALE) and the receiver marker dims to the emergency
   colour.
 
 
@@ -231,7 +237,7 @@ TROUBLESHOOTING
       emergency, not once per poll.
 
   Scope will not follow the POSITION file
-      Check the status line under Settings > Moving Receiver. It reports the
+      Check the status line under Settings > Receiver. It reports the
       parsed position and which format matched, or the read error. Common
       causes: the file is not served by your web server (it must sit beside
       index.html, or PATH must point at a URL the page can reach), or the
@@ -239,7 +245,7 @@ TROUBLESHOOTING
       browser tab to see what the scope is being handed.
 
   Scope follows the file but jumps around at anchor
-      Raise MIN_MOVE_NM in Settings > Moving Receiver. The default of 0.005 nm
+      Raise MIN_MOVE_NM in Settings > Receiver. The default of 0.005 nm
       (~9 m) suits most GPS units; a noisier one may need 0.02.
 
 

@@ -1,4 +1,4 @@
-# ADSB Radarscope v0.0.2
+# ADSB Radarscope v0.0.3
 
 A real-time web-based aircraft tracking application that visualizes ADS-B (Automatic Dependent Surveillance-Broadcast) data on a radar-like display.
 
@@ -12,7 +12,7 @@ A real-time web-based aircraft tracking application that visualizes ADS-B (Autom
 </p>
 
 ![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
-![Version](https://img.shields.io/badge/version-0.0.2-orange.svg)
+![Version](https://img.shields.io/badge/version-0.0.3-orange.svg)
 ![Status](https://img.shields.io/badge/status-alpha-orange.svg)
 
 ## Features
@@ -26,9 +26,13 @@ A real-time web-based aircraft tracking application that visualizes ADS-B (Autom
 - Heading line on every airborne target
 - Clickable aircraft for detailed information
 
-### Moving Receiver
-- Track the scope centre from a `POSITION` file, for a receiver aboard a ship or vehicle
-- The file is polled and the scope re-renders whenever it changes
+### Receiver Type
+- **Static**, **car** or **ship** — chosen in the settings panel or `config.js`
+- The marker is drawn at the centre of the scope: a mast with radiating arcs for
+  a fixed station, a car body or a ship's hull for a mobile one, oriented to
+  course over ground
+- Choosing a mobile type is what starts position tracking: the scope centre then
+  follows a `POSITION` file, polled, re-rendering whenever it changes
 - Accepts NMEA 0183 (`GGA`/`RMC`), JSON, `KEY=VALUE` or a bare `lat, lon` pair
 - Course and speed over ground shown in the status bar
 - Own-ship marker at the scope centre, oriented to course
@@ -66,7 +70,7 @@ A real-time web-based aircraft tracking application that visualizes ADS-B (Autom
 1. **Download and Extract**
    ```bash
    # Extract the release archive to your desired location
-   unzip adsb-radarscope-v0.0.2.zip
+   unzip adsb-radarscope-v0.0.3.zip
    cd adsb-radarscope
    ```
 
@@ -230,7 +234,7 @@ Shortcuts are suppressed while you are typing in a settings field.
 
 The settings panel (`S`) has nine sections:
 - **Home Position** — latitude and longitude (read-only while a POSITION file drives it)
-- **Moving Receiver** — POSITION file path, poll interval, movement threshold, own-ship marker
+- **Receiver** — static / car / ship, POSITION file path, poll interval, movement threshold, marker
 - **Display** — extended labels, symbol size, heading line length, vector look-ahead
 - **Theme** — interface and scope themes (also on the top bar)
 - **Performance** — sweep duration, frame interval, panel refresh, airport cap, position smoothing
@@ -365,7 +369,7 @@ RANGE: 40 NM | CONN: OK | TRACKED: 8 | FILTER: ALL | DATA: 9118A/11010N/12649R |
 | `POS` | The configured home position |
 | `UNDERWAY` | Shown instead of `POS` while a POSITION file is driving the centre, with course and speed. Gains `(STALE)` if no fix has arrived for `STALE_AFTER_MS` |
 
-**The POSITION parser status**, in **Settings (`S`) → Moving Receiver**, reports
+**The POSITION parser status**, in **Settings (`S`) → Receiver**, reports
 the fix it read and which of the four formats matched:
 
 ```
@@ -577,14 +581,28 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## Changelog
 
-### v0.0.2 (Current)
+### v0.0.3 (Current)
+
+**Receiver type.** The receiver is now declared as `static`, `car` or `ship`,
+in the settings panel or as `RECEIVER_TYPE` in `config.js`, and its marker is
+drawn at the centre of the scope — a mast with radiating arcs for a fixed
+station, a car body or a ship's hull for a mobile one, turned to course over
+ground.
+
+The type is the master switch: choosing a mobile one is what starts POSITION
+tracking. `POSITION_FILE.ENABLED` and `POSITION_FILE.SHOW_OWN_SHIP` are
+replaced by `RECEIVER_TYPE` and `SHOW_RECEIVER_MARKER`. Settings saved by
+`0.0.2` are migrated on load: a receiver that was tracking a file becomes a
+ship.
+
+### v0.0.2
 
 **Moving receiver.** The scope centre can now follow a `POSITION` file, for a
 receiver aboard a ship or vehicle. The file is polled with conditional requests
 and the scope re-projects when it changes; NMEA 0183, JSON, `KEY=VALUE` and
 bare `lat, lon` are all accepted. Sub-threshold GPS jitter is ignored rather
 than rebuilding the scope, and a stale fix is flagged on the status bar and the
-own-ship marker.
+receiver marker.
 
 **Advertised features implemented.** Everything the original README promised
 but the source did not do:

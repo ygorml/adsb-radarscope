@@ -1,6 +1,6 @@
 // ADSB Radarscope
 // Author: dustsignal
-// Version: 0.0.2
+// Version: 0.0.3
 // GitHub: https://github.com/dustsignal/adsb-scope
 // Speical thanks to: wire99 & Josh M.
 
@@ -36,7 +36,7 @@
  */
 const CONFIG = {
     /** Version string, shown in the title bar and the version link. @type {string} */
-    VERSION: '0.0.2',
+    VERSION: '0.0.3',
     
     // ---- Home Position -------------------------------------------------
     /** Latitude of the scope centre, decimal degrees. **Set this.** @type {number} */
@@ -45,6 +45,31 @@ const CONFIG = {
     DEFAULT_HOME_LON: -0.0,
     /** Range of the outer ring at startup, nautical miles. @type {number} */
     DEFAULT_RANGE_NM: 50,
+    
+    // ---- Receiver ------------------------------------------------------
+    /**
+     * What the receiver is mounted on.
+     *
+     * `'static'` — a fixed installation. The scope centre is the home position
+     * above, or whatever the settings panel holds, and the POSITION file is not
+     * read.
+     *
+     * `'car'` or `'ship'` — a mobile installation. The centre follows the
+     * POSITION file (see {@link CONFIG.POSITION_FILE}) and the marker is drawn
+     * oriented to course over ground.
+     *
+     * This is the master switch: choosing a mobile type is what starts
+     * position tracking. Only the marker drawn at the centre differs between
+     * `car` and `ship`.
+     * @type {('static'|'car'|'ship')}
+     */
+    RECEIVER_TYPE: 'static',
+    /**
+     * Draw the receiver marker at the centre of the scope. Independent of the
+     * type — turn it off if it crowds the display at short range.
+     * @type {boolean}
+     */
+    SHOW_RECEIVER_MARKER: true,
     
     // ---- Data Sources --------------------------------------------------
     /**
@@ -77,8 +102,8 @@ const CONFIG = {
     
     // ---- Moving receiver (POSITION file) -------------------------------
     /**
-     * Tracks the home position from a file on disk, for a receiver that moves:
-     * a ship, a vehicle, an aircraft.
+     * Tracks the home position from a file on disk, for a receiver that moves.
+     * Read only when {@link CONFIG.RECEIVER_TYPE} is `'car'` or `'ship'`.
      *
      * The browser cannot watch a file, so the file is polled over HTTP with
      * conditional requests — served from the same directory as the page, a
@@ -91,9 +116,6 @@ const CONFIG = {
      * @namespace CONFIG.POSITION_FILE
      */
     POSITION_FILE: {
-        /** Master switch. When off, the home position comes from
-         * `DEFAULT_HOME_LAT`/`LON` or the settings panel. @type {boolean} */
-        ENABLED: false,
         /** Path to the file, relative to the page or absolute. @type {string} */
         PATH: 'POSITION',
         /** How often the file is polled, ms. @type {number} */
@@ -105,8 +127,6 @@ const CONFIG = {
          * @type {number}
          */
         MIN_MOVE_NM: 0.005,
-        /** Draw the own-ship marker at the scope centre. @type {boolean} */
-        SHOW_OWN_SHIP: true,
         /** Age at which a fix is reported as stale in the status bar, ms.
          * @type {number} */
         STALE_AFTER_MS: 30000

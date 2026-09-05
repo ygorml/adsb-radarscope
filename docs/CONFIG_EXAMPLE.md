@@ -152,18 +152,28 @@ For a receiver that moves — aboard a ship, a vehicle, an aircraft — the scop
 centre can follow a file on disk instead of a fixed coordinate.
 
 ```javascript
+RECEIVER_TYPE: 'static',      // 'static' | 'car' | 'ship' — the master switch
+SHOW_RECEIVER_MARKER: true,   // marker at the scope centre
+
 POSITION_FILE: {
-    ENABLED: false,           // master switch
     PATH: 'POSITION',         // relative to the page, or absolute
     POLL_INTERVAL_MS: 2000,   // how often the file is read
     MIN_MOVE_NM: 0.005,       // ~9 m; below this the scope is not re-projected
-    SHOW_OWN_SHIP: true,      // marker at the scope centre
     STALE_AFTER_MS: 30000     // age at which a fix is flagged as stale
 },
 ```
 
-Everything here is also editable in **Settings → Moving Receiver**. While
-tracking is on, the Home Position fields are read-only — the file wins.
+`RECEIVER_TYPE` decides everything. `'static'` is a fixed installation: the
+centre is the home position and `POSITION` is never read. `'car'` and `'ship'`
+are mobile: the centre follows the file, and the two differ only in the marker
+drawn at the centre.
+
+It is deliberately one switch rather than a type plus a separate "track from a
+file" toggle — two settings that have to agree is how you end up with a static
+receiver polling a file, or a ship that never moves.
+
+Everything here is also editable in **Settings → Receiver**. While a mobile type
+is selected, the Home Position fields are read-only — the file wins.
 
 ### How the file is watched
 
@@ -245,7 +255,7 @@ true — they do not smear.
 ### Status and staleness
 
 The status bar replaces `POS:` with `UNDERWAY:` plus course and speed. If no
-fix has arrived for `STALE_AFTER_MS`, it appends `(STALE)` and the own-ship
+fix has arrived for `STALE_AFTER_MS`, it appends `(STALE)` and the receiver
 marker dims and turns the theme's emergency colour, so a dead GPS feed is
 visible on the scope itself rather than only in the status bar.
 

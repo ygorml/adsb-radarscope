@@ -172,9 +172,9 @@ const check = (name, cond, detail = '') =>
 
   // --- 1. boot -----------------------------------------------------------
   check('config.js + app.js execute without throwing', errors.length === 0, errors.slice(0, 4).join(' | '));
-  check('version string reaches the DOM', /v0\.0\.2/.test(doc.getElementById('version-display').innerHTML),
+  check('version string reaches the DOM', /v0\.0\.3/.test(doc.getElementById('version-display').innerHTML),
         doc.getElementById('version-display').innerHTML);
-  check('document.title carries the version', /v0\.0\.2/.test(doc.title), doc.title);
+  check('document.title carries the version', /v0\.0\.3/.test(doc.title), doc.title);
 
   // --- 2. data pipeline --------------------------------------------------
   check('feed was polled', fetchLog.some(u => u.includes('aircraft.json')), fetchLog.length + ' requests');

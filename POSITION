@@ -1,8 +1,8 @@
 # ADSB Radarscope — moving receiver position
 #
 # Rewrite this file from whatever produces your fix and the scope follows it.
-# Enable it in Settings > Moving Receiver, or set POSITION_FILE.ENABLED in
-# config.js. Blank lines and lines starting with # are ignored.
+# It is read when the receiver type is 'car' or 'ship' — set that in
+# Settings > Receiver, or as RECEIVER_TYPE in config.js. Blank lines and lines starting with # are ignored.
 #
 # Four formats are accepted. Use whichever your GPS source already emits:
 #

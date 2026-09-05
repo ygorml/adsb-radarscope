@@ -1,6 +1,6 @@
 // ADSB Radarscope
 // Author: dustsignal
-// Version: 0.0.2
+// Version: 0.0.3
 // GitHub: https://github.com/dustsignal/adsb-scope
 // Speical thanks to: wire99 & Josh M.
 
@@ -330,11 +330,11 @@ if (window.tailwind) {
         soundEnabled: false,
         homeLat: CONFIG.DEFAULT_HOME_LAT,
         homeLon: CONFIG.DEFAULT_HOME_LON,
-        positionFileEnabled: CONFIG.POSITION_FILE.ENABLED,
+        receiverType: CONFIG.RECEIVER_TYPE,
+        showReceiverMarker: CONFIG.SHOW_RECEIVER_MARKER,
         positionFilePath: CONFIG.POSITION_FILE.PATH,
         positionPollIntervalMs: CONFIG.POSITION_FILE.POLL_INTERVAL_MS,
         positionMinMoveNm: CONFIG.POSITION_FILE.MIN_MOVE_NM,
-        showOwnShip: CONFIG.POSITION_FILE.SHOW_OWN_SHIP,
         ownHeading: null,
         ownSpeed: null,
         ownPositionUpdatedAt: 0,
@@ -1937,6 +1937,18 @@ if (window.tailwind) {
      * @namespace PositionManager
      */
     const PositionManager = {
+        /**
+         * Whether the receiver moves, and so whether the POSITION file is read.
+         *
+         * Derived from {@link CONFIG.RECEIVER_TYPE} rather than stored
+         * separately: two switches that have to agree is a way to end up with a
+         * static receiver polling a file, or a ship that never moves.
+         * @returns {boolean} True for a car or a ship.
+         */
+        isMobile() {
+            return state.receiverType === 'car' || state.receiverType === 'ship';
+        },
+
         /** Handle of the polling interval, if running. @type {?number} */
         intervalId: null,
         /** `Last-Modified` of the last body actually parsed. @type {?string} */
@@ -1956,8 +1968,9 @@ if (window.tailwind) {
         start() {
             this.stop();
 
-            if (!state.positionFileEnabled) {
-                this.setStatus('disabled', 'Disabled — using the configured home position.');
+            if (!this.isMobile()) {
+                this.setStatus('disabled',
+                    'Static receiver — using the configured home position.');
                 return;
             }
 
@@ -1995,7 +2008,7 @@ if (window.tailwind) {
          * @returns {Promise<void>}
          */
         async poll() {
-            if (!state.positionFileEnabled) return;
+            if (!this.isMobile()) return;
 
             try {
                 const headers = {};
@@ -2335,7 +2348,7 @@ if (window.tailwind) {
          * @returns {boolean} True when tracking is on but the fix has gone stale.
          */
         isStale() {
-            if (!state.positionFileEnabled || !state.ownPositionUpdatedAt) return false;
+            if (!this.isMobile() || !state.ownPositionUpdatedAt) return false;
             return (Date.now() - state.ownPositionUpdatedAt) > CONFIG.POSITION_FILE.STALE_AFTER_MS;
         }
     };
@@ -2793,26 +2806,30 @@ if (window.tailwind) {
          * @returns {void}
          */
         /**
-         * Draws the own-ship marker at the scope centre while the receiver is
-         * being tracked from the POSITION file.
+         * Draws the receiver marker at the centre of the scope.
          *
-         * A hull outline pointing along course over ground when the fix carries
-         * one, otherwise a circled cross. It dims and turns the emergency colour
-         * once the fix goes stale, so a dead GPS feed is visible on the scope
-         * rather than only in the status bar.
+         * The shape follows {@link CONFIG.RECEIVER_TYPE}: a mast with radiating
+         * arcs for a fixed installation, a car body or a ship's hull for a
+         * mobile one. Mobile markers rotate to course over ground; a static one
+         * has no course to point along, and neither does a mobile receiver that
+         * has not yet reported one.
+         *
+         * It dims and turns the emergency colour once the fix goes stale, so a
+         * dead GPS feed is visible on the scope rather than only in the status
+         * bar.
          * @param {number} cx Canvas centre X.
          * @param {number} cy Canvas centre Y.
          * @returns {void}
          */
-        drawOwnShip(cx, cy) {
-            if (!state.showOwnShip || !state.positionFileEnabled) return;
+        drawReceiverMarker(cx, cy) {
+            if (!state.showReceiverMarker) return;
 
             const ctx = elements.ctx;
             const size = CONFIG.AIRCRAFT_SYMBOL_SIZE * 2.5;
             const stale = PositionManager.isStale();
 
             if (canvasRenderer) {
-                const reach = size + 10;
+                const reach = size + 12;
                 canvasRenderer.markDirty(cx - reach, cy - reach, reach * 2, reach * 2);
             }
 
@@ -2823,36 +2840,145 @@ if (window.tailwind) {
                 : ThemeManager.getScopeThemeColor('selected');
             ctx.lineWidth = 1.5;
 
-            if (typeof state.ownHeading === 'number') {
-                // Hull outline pointing along course over ground.
-                const rad = MathUtils.toRad(state.ownHeading - 90);
-                const cos = Math.cos(rad), sin = Math.sin(rad);
-                const hull = [[size, 0], [-size * 0.6, size * 0.55],
-                              [-size * 0.35, 0], [-size * 0.6, -size * 0.55]];
+            const heading = typeof state.ownHeading === 'number' ? state.ownHeading : null;
 
-                ctx.beginPath();
-                hull.forEach(([hx, hy], i) => {
-                    const px = cx + hx * cos - hy * sin;
-                    const py = cy + hx * sin + hy * cos;
-                    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-                });
-                ctx.closePath();
-                ctx.stroke();
+            if (state.receiverType === 'ship' && heading !== null) {
+                this.drawHullOutline(ctx, cx, cy, size, heading);
+            } else if (state.receiverType === 'car' && heading !== null) {
+                this.drawCarOutline(ctx, cx, cy, size, heading);
+            } else if (state.receiverType === 'static') {
+                this.drawStationOutline(ctx, cx, cy, size);
             } else {
-                // No course available: a plain circled cross marks the origin.
-                ctx.beginPath();
-                ctx.arc(cx, cy, size * 0.7, 0, 2 * Math.PI);
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.moveTo(cx - size, cy);
-                ctx.lineTo(cx + size, cy);
-                ctx.moveTo(cx, cy - size);
-                ctx.lineTo(cx, cy + size);
-                ctx.stroke();
+                // Mobile, but no course reported yet: mark the origin without
+                // implying a direction the receiver has not given us.
+                this.drawOriginCross(ctx, cx, cy, size);
             }
 
             ctx.restore();
         },
+
+        /**
+         * Traces a set of points given relative to the centre, rotated to a
+         * compass heading. Shared by the mobile markers so they orient
+         * identically.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Centre X.
+         * @param {number} cy Centre Y.
+         * @param {Array<Array<number>>} points `[along, across]` pairs, in
+         *   pixels, with `along` towards the front.
+         * @param {number} headingDegrees Heading in degrees true.
+         * @returns {void}
+         */
+        traceOriented(ctx, cx, cy, points, headingDegrees) {
+            // Compass to canvas: north is up, so rotate by -90.
+            const rad = MathUtils.toRad(headingDegrees - 90);
+            const cos = Math.cos(rad), sin = Math.sin(rad);
+
+            ctx.beginPath();
+            points.forEach(([along, across], i) => {
+                const px = cx + along * cos - across * sin;
+                const py = cy + along * sin + across * cos;
+                if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            });
+            ctx.closePath();
+        },
+
+        /**
+         * A ship: pointed bow, notched stern.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Centre X.
+         * @param {number} cy Centre Y.
+         * @param {number} size Half-length in pixels.
+         * @param {number} heading Course over ground, degrees true.
+         * @returns {void}
+         */
+        drawHullOutline(ctx, cx, cy, size, heading) {
+            this.traceOriented(ctx, cx, cy, [
+                [size, 0], [-size * 0.6, size * 0.55],
+                [-size * 0.35, 0], [-size * 0.6, -size * 0.55]
+            ], heading);
+            ctx.stroke();
+        },
+
+        /**
+         * A car: a body with a tapered nose, narrower than the hull so the two
+         * are distinguishable at a glance.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Centre X.
+         * @param {number} cy Centre Y.
+         * @param {number} size Half-length in pixels.
+         * @param {number} heading Course over ground, degrees true.
+         * @returns {void}
+         */
+        drawCarOutline(ctx, cx, cy, size, heading) {
+            const w = size * 0.42;
+            this.traceOriented(ctx, cx, cy, [
+                [size, w * 0.5], [size * 0.55, w], [-size * 0.85, w],
+                [-size, w * 0.55], [-size, -w * 0.55], [-size * 0.85, -w],
+                [size * 0.55, -w], [size, -w * 0.5]
+            ], heading);
+            ctx.stroke();
+
+            // A short bar across the cabin, so the front end is unambiguous.
+            const rad = MathUtils.toRad(heading - 90);
+            const cos = Math.cos(rad), sin = Math.sin(rad);
+            const bar = [[size * 0.1, w], [size * 0.1, -w]];
+            ctx.beginPath();
+            bar.forEach(([along, across], i) => {
+                const px = cx + along * cos - across * sin;
+                const py = cy + along * sin + across * cos;
+                if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            });
+            ctx.stroke();
+        },
+
+        /**
+         * A fixed station: a mast on a baseline, with two arcs radiating from
+         * the top. Deliberately not rotatable — a static receiver has no course.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Centre X.
+         * @param {number} cy Centre Y.
+         * @param {number} size Half-height in pixels.
+         * @returns {void}
+         */
+        drawStationOutline(ctx, cx, cy, size) {
+            const top = cy - size;
+
+            ctx.beginPath();
+            ctx.moveTo(cx, top);
+            ctx.lineTo(cx, cy + size * 0.6);
+            ctx.moveTo(cx - size * 0.55, cy + size * 0.6);
+            ctx.lineTo(cx + size * 0.55, cy + size * 0.6);
+            ctx.stroke();
+
+            for (let i = 1; i <= 2; i++) {
+                const r = size * 0.45 * i;
+                ctx.beginPath();
+                ctx.arc(cx, top, r, MathUtils.toRad(-140), MathUtils.toRad(-40));
+                ctx.stroke();
+            }
+        },
+
+        /**
+         * A circled cross, for a mobile receiver whose course is not yet known.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Centre X.
+         * @param {number} cy Centre Y.
+         * @param {number} size Half-width in pixels.
+         * @returns {void}
+         */
+        drawOriginCross(ctx, cx, cy, size) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, size * 0.7, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx - size, cy);
+            ctx.lineTo(cx + size, cy);
+            ctx.moveTo(cx, cy - size);
+            ctx.lineTo(cx, cy + size);
+            ctx.stroke();
+        },
+
 
         drawAircraftTrail(ac, cx, cy, radius, color) {
             const ctx = elements.ctx;
@@ -3713,7 +3839,7 @@ if (window.tailwind) {
             // A moving receiver gets its own segment: course, speed and whether
             // the fix is still fresh.
             let positionLabel = `POS: ${state.homeLat.toFixed(5)}, ${state.homeLon.toFixed(5)}`;
-            if (state.positionFileEnabled) {
+            if (PositionManager.isMobile()) {
                 const stale = PositionManager.isStale();
                 const icon = state.positionFileStatus.kind === 'error' || stale
                     ? '<span class="status-icon status-error"></span>'
@@ -4359,8 +4485,8 @@ if (window.tailwind) {
             this.addEventListenerWithCleanup(addSourceBtn, 'click', this.addDataSource.bind(this));
 
             // Home fields follow the tracking checkbox without waiting for Save
-            const positionToggle = document.getElementById('position-file-enabled');
-            this.addEventListenerWithCleanup(positionToggle, 'change',
+            const receiverTypeSelect = document.getElementById('receiver-type');
+            this.addEventListenerWithCleanup(receiverTypeSelect, 'change',
                 this.updateHomeFieldState.bind(this));
             
             // Mobile menu
@@ -4642,11 +4768,11 @@ if (window.tailwind) {
             set('trail-width', state.trailWidth);
 
             // Moving receiver
-            set('position-file-enabled', state.positionFileEnabled, 'checked');
+            set('receiver-type', state.receiverType);
             set('position-file-path', state.positionFilePath);
             set('position-poll-interval', state.positionPollIntervalMs);
             set('position-min-move', state.positionMinMoveNm);
-            set('show-own-ship', state.showOwnShip, 'checked');
+            set('show-receiver-marker', state.showReceiverMarker, 'checked');
 
             // Display
             set('show-label-details', state.showLabelDetails, 'checked');
@@ -4703,14 +4829,15 @@ if (window.tailwind) {
          * @returns {void}
          */
         updateHomeFieldState() {
-            const tracking = !!document.getElementById('position-file-enabled')?.checked;
+            const chosen = document.getElementById('receiver-type')?.value;
+            const tracking = chosen === 'car' || chosen === 'ship';
             ['home-lat', 'home-lon'].forEach(id => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 el.readOnly = tracking;
                 el.style.opacity = tracking ? '0.5' : '';
                 el.title = tracking
-                    ? 'Driven by the POSITION file while tracking is enabled'
+                    ? 'Driven by the POSITION file while the receiver is mobile'
                     : '';
             });
         },
@@ -4797,11 +4924,14 @@ if (window.tailwind) {
                     document.getElementById(id)?.checked ?? fallback;
 
                 // Moving receiver
-                const wasTracking = state.positionFileEnabled;
+                const wasTracking = PositionManager.isMobile();
                 const previousPath = state.positionFilePath;
                 const previousInterval = state.positionPollIntervalMs;
 
-                state.positionFileEnabled = bool('position-file-enabled', state.positionFileEnabled);
+                const chosenType = document.getElementById('receiver-type')?.value;
+                if (chosenType === 'static' || chosenType === 'car' || chosenType === 'ship') {
+                    state.receiverType = chosenType;
+                }
                 state.positionFilePath =
                     (document.getElementById('position-file-path')?.value || '').trim()
                     || CONFIG.POSITION_FILE.PATH;
@@ -4809,7 +4939,7 @@ if (window.tailwind) {
                     CONFIG.POSITION_FILE.POLL_INTERVAL_MS, 250, 60000);
                 state.positionMinMoveNm = num('position-min-move',
                     CONFIG.POSITION_FILE.MIN_MOVE_NM, 0, 5);
-                state.showOwnShip = bool('show-own-ship', state.showOwnShip);
+                state.showReceiverMarker = bool('show-receiver-marker', state.showReceiverMarker);
 
                 // Display
                 state.showLabelDetails = bool('show-label-details', state.showLabelDetails);
@@ -4861,8 +4991,8 @@ if (window.tailwind) {
                     return;
                 }
 
-                if (state.positionFileEnabled && !state.positionFilePath) {
-                    ErrorBoundary.showWarning('A POSITION file path is required while tracking is enabled');
+                if (PositionManager.isMobile() && !state.positionFilePath) {
+                    ErrorBoundary.showWarning('A mobile receiver needs a POSITION file path');
                     return;
                 }
                 
@@ -4870,11 +5000,11 @@ if (window.tailwind) {
                 const settings = {
                     homeLat: state.homeLat,
                     homeLon: state.homeLon,
-                    positionFileEnabled: state.positionFileEnabled,
+                    receiverType: state.receiverType,
                     positionFilePath: state.positionFilePath,
                     positionPollIntervalMs: state.positionPollIntervalMs,
                     positionMinMoveNm: state.positionMinMoveNm,
-                    showOwnShip: state.showOwnShip,
+                    showReceiverMarker: state.showReceiverMarker,
                     showLabelDetails: state.showLabelDetails,
                     scopeThemeIndex: state.scopeThemeIndex,
                     display: {
@@ -4913,7 +5043,7 @@ if (window.tailwind) {
 
                 // Restart position tracking when it was switched on or off, or
                 // its file or cadence changed.
-                if (state.positionFileEnabled !== wasTracking ||
+                if (PositionManager.isMobile() !== wasTracking ||
                     state.positionFilePath !== previousPath ||
                     state.positionPollIntervalMs !== previousInterval) {
                     PositionManager.start();
@@ -5460,7 +5590,7 @@ if (window.tailwind) {
                 if (shouldRender) {
                     Renderer.drawScope(cx, cy, radius);
                     Renderer.drawAircraft(w, cx, cy, radius);
-                    Renderer.drawOwnShip(cx, cy);
+                    Renderer.drawReceiverMarker(cx, cy);
                     Renderer.drawSweep(cx, cy, radius);
                     Renderer.needsRedraw = false;
                     state.lastRenderTime = time;
@@ -5607,13 +5737,22 @@ if (window.tailwind) {
                     state.metricsSectionExpanded = settings.metricsSectionExpanded !== undefined ? settings.metricsSectionExpanded : true;
                     state.selectedHex = settings.selectedHex || null;
 
-                    state.positionFileEnabled = settings.positionFileEnabled === true;
+                    // settings saved before 0.0.3 carry positionFileEnabled and
+                    // showOwnShip; map them onto the receiver type so an existing
+                    // install does not silently revert to static.
+                    if (settings.receiverType === 'static' || settings.receiverType === 'car' ||
+                        settings.receiverType === 'ship') {
+                        state.receiverType = settings.receiverType;
+                    } else if (settings.positionFileEnabled === true) {
+                        state.receiverType = 'ship';
+                    }
                     state.positionFilePath = settings.positionFilePath || CONFIG.POSITION_FILE.PATH;
                     state.positionPollIntervalMs = settings.positionPollIntervalMs ||
                         CONFIG.POSITION_FILE.POLL_INTERVAL_MS;
                     state.positionMinMoveNm = typeof settings.positionMinMoveNm === 'number'
                         ? settings.positionMinMoveNm : CONFIG.POSITION_FILE.MIN_MOVE_NM;
-                    state.showOwnShip = settings.showOwnShip !== false;
+                    state.showReceiverMarker = settings.showReceiverMarker !== false &&
+                                               settings.showOwnShip !== false;
                     state.showLabelDetails = settings.showLabelDetails !== false;
                     if (typeof settings.scopeThemeIndex === 'number' &&
                         settings.scopeThemeIndex >= 0 &&

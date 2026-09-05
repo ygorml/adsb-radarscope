@@ -12,6 +12,7 @@ let POSITION_BODY = 'LAT=0.0\nLON=0.0\n';
 let positionReads = 0;
 
 function boot({ storage = {}, feed = null, config = '' } = {}) {
+  let reads = 0;              // POSITION reads by *this* instance
   const errors = [];
   const unhandled = [];
   const vc = new VirtualConsole();
@@ -36,7 +37,7 @@ function boot({ storage = {}, feed = null, config = '' } = {}) {
         const s = String(u);
         if (/\.invalid\//.test(s)) return Promise.reject(new Error('unreachable host'));
         if (/POSITION/.test(s)) {
-          positionReads++;
+          positionReads++; reads++;
           return Promise.resolve({ ok: true, status: 200,
             headers: { get: () => null },
             text: () => Promise.resolve(POSITION_BODY) });
@@ -108,7 +109,8 @@ function boot({ storage = {}, feed = null, config = '' } = {}) {
   const frames = (n, t0 = 0) => { for (let i = 0; i < n; i++) {
     const q = window.__frames.splice(0); if (!q.length) return; for (const cb of q) cb(t0 + i * 20); } };
   const g = e => window.eval(`(function(){try{return ${e}}catch(err){return '__ERR__: '+err.message}})()`);
-  return { window, doc, frames, g, errors, unhandled, drawCalls, putImageDataArgs };
+  return { window, doc, frames, g, errors, unhandled, drawCalls, putImageDataArgs,
+           positionReads: () => reads };
 }
 
 const results = [];
@@ -192,7 +194,7 @@ const check = (group, name, cond, detail = '') =>
           withDetails === 1 && typeof g('window.__t.state.showLabelDetails') === 'boolean');
 
     // --- settings panel now carries every advertised section ---
-    const sections = ['position-file-enabled', 'show-label-details', 'aircraft-symbol-size',
+    const sections = ['receiver-type', 'show-receiver-marker', 'show-label-details', 'aircraft-symbol-size',
                       'heading-line-length', 'vector-minutes', 'settings-ui-theme',
                       'settings-scope-theme', 'sweep-duration', 'render-throttle',
                       'ui-update-interval', 'max-airports-display', 'smoothing-factor',
@@ -280,7 +282,7 @@ const check = (group, name, cond, detail = '') =>
     POSITION_BODY = 'LAT=-23.9608\nLON=-46.3336\nHEADING=045\nSPEED=12.4\n';
     positionReads = 0;
     const { g, doc, frames } = boot({
-      config: "CONFIG.POSITION_FILE.ENABLED=true;CONFIG.POSITION_FILE.PATH='POSITION';" +
+      config: "CONFIG.RECEIVER_TYPE='ship';CONFIG.POSITION_FILE.PATH='POSITION';" +
               "CONFIG.POSITION_FILE.POLL_INTERVAL_MS=300;"
     });
     await new Promise(r => setTimeout(r, 400));
@@ -328,9 +330,10 @@ const check = (group, name, cond, detail = '') =>
           g('window.__t.state.staticEpoch') === epochQuiet,
           `moved ~1 m, staticEpoch stayed ${epochQuiet}`);
 
-    check('POSITION', 'own-ship marker is drawn while tracking',
-          g('typeof window.__t.Renderer.drawOwnShip') === 'function' &&
-          g('window.__t.state.showOwnShip') === true);
+    check('POSITION', 'receiver marker is drawn while tracking',
+          g('typeof window.__t.Renderer.drawReceiverMarker') === 'function' &&
+          g('window.__t.state.showReceiverMarker') === true &&
+          g('window.__t.state.receiverType') === 'ship');
 
     // Aircraft must re-project against the new origin.
     check('POSITION', 'aircraft distances are measured from the new position',
@@ -340,6 +343,70 @@ const check = (group, name, cond, detail = '') =>
             return d > 1000;   // the test aircraft is now far from Santos
           })(),
           g('Math.round(window.__t.MathUtils.haversineDistance(window.__t.state.homeLat,window.__t.state.homeLon,0.2,0.1))') + ' nm');
+  }
+
+  // =================== receiver type ===================
+  {
+    const { g, doc, window, frames, drawCalls, positionReads: myReads } = boot({
+      config: "CONFIG.RECEIVER_TYPE='ship';CONFIG.POSITION_FILE.PATH='POSITION';" +
+              "CONFIG.POSITION_FILE.POLL_INTERVAL_MS=300;"
+    });
+    POSITION_BODY = 'LAT=-22.90\nLON=-43.15\nHEADING=090\nSPEED=8.0\n';
+    await new Promise(r => setTimeout(r, 400));
+    frames(40);
+
+    check('RECEIVER', 'a mobile type starts POSITION tracking on its own',
+          g('window.__t.PositionManager.isMobile()') === true &&
+          g('window.__t.state.ownSpeed') === 8,
+          `type=${g('window.__t.state.receiverType')}, ${g('window.__t.state.ownSpeed')} kt`);
+
+    check('RECEIVER', 'each type has its own marker shape',
+          ['drawHullOutline', 'drawCarOutline', 'drawStationOutline', 'drawOriginCross']
+            .every(fn => g(`typeof window.__t.Renderer.${fn}`) === 'function'),
+          'hull, car, station and origin-cross');
+
+    // Each shape must actually reach the canvas, and differ from the others.
+    const strokesFor = type => {
+      window.eval(`window.__t.state.receiverType = '${type}';`);
+      const before = drawCalls.stroke || 0;
+      g('window.__t.Renderer.drawReceiverMarker(500, 400)');
+      return (drawCalls.stroke || 0) - before;
+    };
+    const ship = strokesFor('ship'), car = strokesFor('car'), stat = strokesFor('static');
+    check('RECEIVER', 'ship, car and static each draw a distinct marker',
+          ship > 0 && car > 0 && stat > 0 && new Set([ship, car, stat]).size === 3,
+          `strokes — ship ${ship}, car ${car}, static ${stat}`);
+
+    // A static receiver must not poll the file at all. Switch first, then let
+    // any interval tick already in flight land before counting — otherwise the
+    // 300 ms poller races the assertion.
+    window.eval("window.__t.state.receiverType='static';");
+    await new Promise(r => setTimeout(r, 500));
+    const readsBefore = myReads();
+    g('window.__t.PositionManager.poll()');
+    await new Promise(r => setTimeout(r, 700));
+    check('RECEIVER', 'a static receiver never reads the POSITION file',
+          myReads() === readsBefore && g('window.__t.PositionManager.isMobile()') === false,
+          `${myReads() - readsBefore} further reads over two poll periods`);
+
+    check('RECEIVER', 'the marker can be switched off',
+          (() => {
+            window.eval("window.__t.state.showReceiverMarker=false;");
+            const before = drawCalls.stroke || 0;
+            g('window.__t.Renderer.drawReceiverMarker(500, 400)');
+            const after = drawCalls.stroke || 0;
+            window.eval("window.__t.state.showReceiverMarker=true;");
+            return after === before;
+          })(), 'no strokes with showReceiverMarker off');
+
+    check('RECEIVER', 'settings offer exactly static, car and ship',
+          (() => {
+            const el = doc.getElementById('receiver-type');
+            return el && [...el.options].map(o => o.value).join(',') === 'static,car,ship';
+          })(),
+          doc.getElementById('receiver-type')
+            ? [...doc.getElementById('receiver-type').options].map(o => o.value).join(',')
+            : 'select missing');
   }
 
   // =================== POSITION parser formats ===================

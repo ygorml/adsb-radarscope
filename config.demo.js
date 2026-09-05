@@ -62,9 +62,10 @@
     CONFIG.AIRPORT_DISPLAY.MIN_RUNWAY_LENGTH_FT = 3000;
 
     // ---- Moving receiver -------------------------------------------------
-    // Reads POSITION, which ships holding this same position with
-    // SPEED=3 and HEADING=180. Run tools/demo-feed.js --ship to see it move.
-    CONFIG.POSITION_FILE.ENABLED = true;
+    // A ship, so the scope reads POSITION and draws a hull at the centre.
+    // POSITION ships holding this same position at SPEED=3, HEADING=180;
+    // run tools/ship-sim.js to get under way at 8 knots.
+    CONFIG.RECEIVER_TYPE = 'ship';
     CONFIG.POSITION_FILE.PATH = 'POSITION';
     CONFIG.POSITION_FILE.POLL_INTERVAL_MS = 1000;
 
@@ -72,7 +73,7 @@
     // 9 m default threshold — so with the stock value the scope would only
     // re-project every few seconds. Lowered here so the movement is visible.
     CONFIG.POSITION_FILE.MIN_MOVE_NM = 0.0005;   // ~0.9 m
-    CONFIG.POSITION_FILE.SHOW_OWN_SHIP = true;
+    CONFIG.SHOW_RECEIVER_MARKER = true;
 
     // ---- Visibility over correctness, for a demonstration ---------------
     CONFIG.SWEEP_DURATION_S = 3.0;       // a little brisker than the 3.8 default
@@ -80,5 +81,5 @@
     CONFIG.HEADING_LINE_LENGTH = 12;
 
     console.log('config.local.js: demo configuration active — Guanabara Bay, ' +
-                'POSITION tracking on, reading data/ locally');
+                'ship receiver tracking POSITION, reading data/ locally');
 })();

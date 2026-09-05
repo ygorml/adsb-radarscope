@@ -153,6 +153,11 @@ head of its own trail rather than beside it.
 `PositionManager` lets the scope centre follow a receiver aboard a ship or
 vehicle, reading it from a `POSITION` file.
 
+Whether it runs at all is derived, not stored: `PositionManager.isMobile()`
+reads `state.receiverType`, so a static receiver cannot end up polling a file
+and a mobile one cannot end up pinned. The type also selects which marker
+`Renderer.drawReceiverMarker` draws at the centre.
+
 The browser cannot watch a file, so the file is polled with
 `If-Modified-Since`/`If-None-Match`; an unchanged file costs a `304` and nothing
 downstream runs. Servers that ignore conditional requests are handled by
@@ -176,7 +181,7 @@ Two things do need care, and both are handled in `PositionManager.applyFix`:
   (a full re-raster several times a second, forever, on a moored vessel).
 
 The status bar switches from `POS:` to `UNDERWAY:` with course and speed, and a
-fix older than `STALE_AFTER_MS` is marked `(STALE)` with the own-ship marker
+fix older than `STALE_AFTER_MS` is marked `(STALE)` with the receiver marker
 dimmed to the emergency colour — a dead GPS feed should be visible on the scope,
 not only in a log.
 

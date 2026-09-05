@@ -31,6 +31,7 @@ Individually:
 ```bash
 npm run test:runtime      # boot and render
 npm run test:features     # moving receiver, settings, previously-inert flags
+npm run test:migration    # older stored settings still load correctly
 npm run test:defects      # the audited defects must not reproduce
 npm run test:multisource  # multi-source resilience (slow: real retry backoff)
 ```
@@ -44,6 +45,7 @@ Each suite exits non-zero on failure, so they work as a CI gate.
 | `run.js` | 31 checks: startup, polling, CSV parsing, sweep-gated promotion, trails, the static-layer cache, every panel, emergency handling, classification, interaction, export, persistence, teardown |
 | `features.js` | 46 checks: the moving receiver end to end, every accepted `POSITION` format and its rejection cases, each previously-inert `CONFIG` flag, each newly implemented UI feature |
 | `bugs.js` | Reproduction attempts for the defects in [KNOWN_ISSUES.md](../docs/KNOWN_ISSUES.md). These *should* all report "not reproduced" — each one is a regression guard |
+| `migration.js` | Stored settings from an older release still load into the right state — the failure mode where nothing errors and the app just comes up configured differently |
 | `multisource.js` | The two critical data-fetch defects: a dead source must not stop the healthy ones, and failed requests must not leak unhandled rejections |
 
 ## How it works
@@ -84,6 +86,12 @@ rest of the source is injected byte for byte.
   they appear, as `multisource.js` does.
 - **`localStorage` shadows `config.js`.** Seed it deliberately, or clear it, so a
   test is not reading state left by the settings panel.
+- **`App.init` runs on `DOMContentLoaded`.** Reading state in the same tick as
+  `boot()` reads it before the application has started; await a turn of the
+  event loop first, or you will be testing the defaults.
+- **Counters must be per instance.** Earlier jsdom instances keep their own
+  pollers running, so a module-level tally cannot attribute a POSITION read to
+  the instance under test.
 - **The retry backoff is real** (1 s, 2 s, 4 s). A multi-source test genuinely
   takes ~9 s per poll; do not shorten the waits to make it fast, or you will be
   asserting on a cycle that has not finished.
