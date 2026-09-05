@@ -302,7 +302,14 @@ const UI_THEMES = [
     { key: 'sandstorm-ui', name: 'Sandstorm', group: 'Light' }
 ];
 
-// Scope Theme Definitions
+/**
+ * Available radar-scope palettes, in dropdown order.
+ *
+ * The array index is the stored `scopeThemeIndex`, so entries should be
+ * appended rather than reordered; every `key` must have a matching entry
+ * in {@link SCOPE_THEME_COLORS}.
+ * @type {Array<{name: string, key: string}>}
+ */
 const SCOPE_THEMES = [
     { name: 'Classic Green CRT', key: 'classic-green' },
     { name: 'Amber CRT', key: 'amber-crt' },
@@ -357,7 +364,25 @@ const SCOPE_THEMES = [
     { name: 'Hi Vis', key: 'hi-vis' }
 ];
 
-// Scope Theme Color Schemes
+/**
+ * Colour roles for each scope theme, keyed by the theme's `key`.
+ *
+ * - `background` scope face
+ * - `grid`       range rings, crosshairs and compass ticks
+ * - `sweep`      rotating sweep line
+ * - `aircraft`   default target colour
+ * - `selected`   the target selected in the list or on the scope
+ * - `emergency`  targets squawking 7500/7600/7700
+ * - `ground`     traffic reporting on-ground
+ * - `text`       range labels, compass labels and data blocks
+ * - `mlat`       multilaterated targets
+ * - `adsb`       ADS-B targets
+ * - `other`      targets of unknown provenance
+ *
+ * A missing role renders as magenta `#FF00FF` — see
+ * {@link ThemeManager.getScopeThemeColor} — so gaps are visible at a glance.
+ * @type {Object<string, Object<string, string>>}
+ */
 const SCOPE_THEME_COLORS = {
     'classic-green': { background: '#001200', grid: '#003300', sweep: '#00FF00', aircraft: '#00FF00', selected: '#CCFFCC', emergency: '#FF6666', ground: '#00B300', text: '#C8FFC8', mlat: '#FFFF00', adsb: '#00FF00', other: '#00AAAA' },
     'amber-crt': {background: '#1A0F00', grid: '#FFB000', sweep: '#FFB00040', aircraft: '#FFB300', selected: '#FFFFFF', emergency: '#FF0000', ground: '#D9534F', text: '#FFB000', mlat: '#FFFF00', adsb: '#FFC763', other: '#FF8000'},

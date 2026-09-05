@@ -205,6 +205,12 @@ if (window.tailwind) {
             });
         }
 
+        /**
+         * Registers a callback fired whenever a property changes.
+         * @param {string} property Property to watch.
+         * @param {function(*, *): void} callback Receives `(newValue, oldValue)`.
+         * @returns {void}
+         */
         subscribe(property, callback) {
             if (!this.listeners.has(property)) {
                 this.listeners.set(property, new Set());
@@ -212,6 +218,13 @@ if (window.tailwind) {
             this.listeners.get(property).add(callback);
         }
 
+        /**
+         * Invokes every callback registered for a property.
+         * @param {string} property Property that changed.
+         * @param {*} newValue Value after the write.
+         * @param {*} oldValue Value before the write.
+         * @returns {void}
+         */
         notifyListeners(property, newValue, oldValue) {
             const callbacks = this.listeners.get(property);
             if (callbacks) {
@@ -220,8 +233,21 @@ if (window.tailwind) {
         }
     }
 
-    // Memory Management with Object Pooling
+    /**
+     * A fixed-size pool of reusable objects.
+     *
+     * Recycling short-lived objects (trail points, above all) keeps the
+     * allocation rate low enough that garbage-collection pauses do not show up
+     * as stutter in the sweep.
+     * @class
+     */
     class ObjectPool {
+        /**
+         * @param {function(): Object} createFn Factory for new instances.
+         * @param {?function(Object): void} resetFn Clears an object before reuse.
+         * @param {number} [initialSize=CONFIG.PERFORMANCE.OBJECT_POOL_SIZE] How
+         *   many objects to pre-allocate.
+         */
         constructor(createFn, resetFn, initialSize = CONFIG.PERFORMANCE.OBJECT_POOL_SIZE) {
             this.createFn = createFn;
             this.resetFn = resetFn;
@@ -232,23 +258,45 @@ if (window.tailwind) {
             }
         }
 
+        /**
+         * Takes an object from the pool, creating a new one if it is empty.
+         * @returns {Object} A reset, ready-to-use object.
+         */
         acquire() {
             return this.pool.length > 0 ? this.pool.pop() : this.createFn();
         }
 
+        /**
+         * Resets an object and returns it to the pool.
+         * @param {Object} obj Object to recycle.
+         * @returns {void}
+         */
         release(obj) {
             if (this.resetFn) this.resetFn(obj);
             this.pool.push(obj);
         }
     }
 
-    // Object pools for frequently created objects
+    /**
+     * Pool of trail points. Aircraft trails churn thousands of small objects a
+     * minute, so they are recycled instead of allocated.
+     * @type {ObjectPool}
+     */
     const trailPointPool = new ObjectPool(
         () => ({ x: 0, y: 0, lat: 0, lon: 0, timestamp: 0 }),
         (obj) => { obj.x = obj.y = obj.lat = obj.lon = obj.timestamp = 0; }
     );
 
-    // Enhanced Application State with performance optimizations
+    /**
+     * The single application state store.
+     *
+     * `aircraftData` is the raw feed; `displayedAircraft` is the subset the
+     * sweep has painted, each entry carrying its screen position, geographic
+     * trail and fade alpha. The rest is session statistics, layer toggles,
+     * user settings and the handles ({@link state.eventListeners},
+     * `intervals`, `timeouts`) that make a clean teardown possible.
+     * @type {StateManager}
+     */
     const stateManager = new StateManager({
         aircraftData: {},
         displayedAircraft: {},
@@ -318,12 +366,26 @@ if (window.tailwind) {
         timeouts: []
     });
 
+    /**
+     * The reactive application state. Writing to a property here notifies any
+     * subscriber registered on it.
+     * @type {Object}
+     */
     const state = stateManager.state;
 
-    // WeakMap for aircraft references
+    /**
+     * Side-table for per-aircraft metadata that must not keep an aircraft
+     * object alive once it is dropped from state.
+     * @type {WeakMap<Object, Object>}
+     */
     const aircraftReferences = new WeakMap();
 
-    // DOM Elements Cache with error checking
+    /**
+     * Cached references to every DOM node the app touches, resolved once at
+     * load. Entries may be `null` if the markup changed, so callers use
+     * optional chaining.
+     * @type {Object<string, ?Element>}
+     */
     const elements = {
         canvas: document.getElementById('radarCanvas'),
         canvasContainer: document.getElementById('canvas-container'),
@@ -366,7 +428,10 @@ if (window.tailwind) {
         ctx: null
     };
 
-    // Initialize canvas context with error checking
+    /**
+     * Acquire the 2D context up front; without it the scope cannot render and
+     * {@link CanvasRenderer} is never constructed.
+     */
     if (elements.canvas) {
         elements.ctx = elements.canvas.getContext('2d');
         if (!elements.ctx) {
@@ -410,6 +475,11 @@ if (window.tailwind) {
             }
         }
 
+        /**
+         * Creates the offscreen canvas at the current canvas size. Falls back
+         * silently to on-screen rendering where OffscreenCanvas is unavailable.
+         * @returns {void}
+         */
         initOffscreenCanvas() {
             try {
                 this.offscreenCanvas = new OffscreenCanvas(
@@ -622,7 +692,16 @@ if (window.tailwind) {
             this.drawCrosshairsAndTicks(ctx, cx, cy, radius);
         }
 
-        // Small range labels for range rings
+        /**
+         * Labels one range ring with its distance in nautical miles.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} ringRadius Radius of this ring in pixels.
+         * @param {number} rangeNm Distance the ring represents.
+         * @param {number} index 1-based ring number, outermost is 4.
+         * @returns {void}
+         */
         drawRangeLabel(ctx, cx, cy, ringRadius, rangeNm, index) {
             ctx.save();
             ctx.fillStyle = ThemeManager.getScopeThemeColor('text');
@@ -638,6 +717,16 @@ if (window.tailwind) {
             ctx.restore();
         }
 
+        /**
+         * Draws the centre crosshairs and the compass rose: ticks every 10°,
+         * lengthened at 30° and 90°, with numeric labels on the non-cardinal
+         * marks.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawCrosshairsAndTicks(ctx, cx, cy, radius) {
             // Crosshairs
             ctx.strokeStyle = ThemeManager.getScopeThemeColor('grid');
@@ -672,6 +761,17 @@ if (window.tailwind) {
             this.drawCardinalDirections(ctx, cx, cy, radius);
         }
 
+        /**
+         * Draws one bearing label outside the compass rose, rotated to sit
+         * radially.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @param {number} angle Bearing in degrees, used as the label text.
+         * @param {number} angleRad Same bearing in canvas radians.
+         * @returns {void}
+         */
         drawTickLabel(ctx, cx, cy, radius, angle, angleRad) {
             const textRadius = radius + 20;
             const textX = cx + textRadius * Math.cos(angleRad);
@@ -686,6 +786,14 @@ if (window.tailwind) {
             ctx.restore();
         }
 
+        /**
+         * Draws the N/E/S/W cardinal markers just outside the outer ring.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawCardinalDirections(ctx, cx, cy, radius) {
             const textRadius = radius + 25;
             ctx.font = `${Math.max(10, radius * 0.035)}px monospace`;
@@ -699,6 +807,16 @@ if (window.tailwind) {
             ctx.fillText("W", cx - textRadius, cy);
         }
 
+        /**
+         * Draws the airport and navaid layers.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @param {?Array<Airport>} [airports=null] Airports already looked up by
+         *   the caller; when `null` they are fetched here.
+         * @returns {void}
+         */
         drawAirportsAndNavaids(ctx, cx, cy, radius, airports = null) {
             // If airport data isn't passed in, fetch it now.
             const airportData = airports !== null ? airports : (state.showAirports ? 
@@ -718,6 +836,16 @@ if (window.tailwind) {
             }
         }
 
+        /**
+         * Draws airport symbols with their ICAO labels, plus their runways when
+         * that layer is enabled.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {Array<Airport>} airports Airports to draw.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawAirports(ctx, airports, cx, cy, radius) {
             ctx.save();
             ctx.strokeStyle = '#8888FF';
@@ -743,6 +871,16 @@ if (window.tailwind) {
             ctx.restore();
         }
 
+        /**
+         * Draws navaid symbols with their identifiers: a hexagon for VOR and
+         * VORTAC, a circle for everything else.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {Array<Navaid>} navaids Navaids to draw.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawNavaids(ctx, navaids, cx, cy, radius) {
             ctx.save();
             ctx.strokeStyle = '#FFAA88';
@@ -776,6 +914,15 @@ if (window.tailwind) {
             ctx.restore();
         }
 
+        /**
+         * Draws every runway of one airport as a line between its two thresholds.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {string} icao Airport ICAO identifier.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawRunwaysForAirport(ctx, icao, cx, cy, radius) {
             const runways = CSVDataManager.getRunwaysForAirport(icao);
             
@@ -798,17 +945,35 @@ if (window.tailwind) {
         }
     }
 
-    // Initialize the canvas renderer
+    /**
+     * Static-layer renderer, or `null` when no 2D context could be obtained.
+     * @type {?CanvasRenderer}
+     */
     let canvasRenderer = null;
     if (elements.ctx) {
         canvasRenderer = new CanvasRenderer(elements.ctx);
     }
 
-    // Audio context for sound alerts
+    /**
+     * Web Audio context for alert tones. Created lazily on the first user
+     * click, because browsers block one constructed without a gesture.
+     * @type {?AudioContext}
+     */
     let audioContext = null;
 
-    // Global error boundary
+    /**
+     * Central error handling. Every subsystem funnels failures here so a fault
+     * in one layer degrades that layer instead of stopping the scope.
+     * @namespace ErrorBoundary
+     */
     const ErrorBoundary = {
+        /**
+         * Logs an error, surfaces it to the user and reports it to analytics when
+         * a `gtag` collector is present.
+         * @param {Error} error The failure.
+         * @param {string} [context="Application"] Subsystem where it happened.
+         * @returns {void}
+         */
         handleError(error, context = 'Application') {
             console.error(`[${context}] Error:`, error);
             this.showError(`${context} Error: ${error.message}`);
@@ -821,6 +986,11 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Shows a dismissible error banner for 10 seconds.
+         * @param {string} message Error text.
+         * @returns {void}
+         */
         showError(message) {
             const errorDisplay = document.getElementById('error-display');
             if (!errorDisplay) return;
@@ -842,6 +1012,11 @@ if (window.tailwind) {
             }, 10000);
         },
         
+        /**
+         * Shows a dismissible warning banner for 7 seconds.
+         * @param {string} message Warning text.
+         * @returns {void}
+         */
         showWarning(message) {
             const errorDisplay = document.getElementById('error-display');
             if (!errorDisplay) return;
@@ -864,8 +1039,20 @@ if (window.tailwind) {
         }
     };
 
-    // Enhanced Memory Management
+    /**
+     * Periodic reclamation of stale aircraft and expired trail points. Without
+     * it a long-running session accumulates history for aircraft that left
+     * range hours ago.
+     * @namespace MemoryManager
+     */
     const MemoryManager = {
+        /**
+         * Expires trail points older than `trailFadeTimeMinutes` and aircraft not
+         * heard from for `SWEEP_DURATION_S × AIRCRAFT_TIMEOUT_FACTOR` seconds,
+         * returning their trail points to the pool rather than leaving them for
+         * the collector.
+         * @returns {void}
+         */
         cleanup() {
             const now = Date.now();
             const cutoffTime = now - (state.trailFadeTimeMinutes * 60 * 1000);
@@ -904,21 +1091,59 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Starts the periodic cleanup on a
+         * {@link CONFIG.MEMORY_CLEANUP_INTERVAL_MS} interval, registered for
+         * teardown.
+         * @returns {void}
+         */
         scheduleCleanup() {
             const cleanupInterval = setInterval(() => this.cleanup(), CONFIG.MEMORY_CLEANUP_INTERVAL_MS);
             state.intervals.push(cleanupInterval);
         }
     };
 
-    // Enhanced Utility Functions with optimized calculations
+    /**
+     * Geodesic maths for the scope: distance, bearing, projection to screen
+     * coordinates and dead reckoning. Distance results are memoised because
+     * they dominate the per-frame cost.
+     * @namespace MathUtils
+     */
     const MathUtils = {
-        // Cache for frequently used calculations
+        /**
+         * Memoised {@link MathUtils.haversineDistance} results, capped at 1000
+         * entries.
+         * @type {Map<string, number>}
+         */
         _cache: new Map(),
         
+        /**
+         * Degrees to radians.
+         * @param {number} deg Angle in degrees.
+         * @returns {number} Angle in radians.
+         */
         toRad: (deg) => deg * Math.PI / 180,
+
+        /**
+         * Radians to degrees.
+         * @param {number} rad Angle in radians.
+         * @returns {number} Angle in degrees.
+         */
         toDeg: (rad) => rad * 180 / Math.PI,
         
-        // Optimized haversine with caching
+        /**
+         * Great-circle distance in nautical miles.
+         *
+         * Results are memoised on coordinates rounded to four decimals (~11 m),
+         * because the same pairs are recomputed many times per frame while
+         * filtering airports and navaids. The cache is capped at 1000 entries and
+         * evicts oldest-first.
+         * @param {number} lat1 Start latitude.
+         * @param {number} lon1 Start longitude.
+         * @param {number} lat2 End latitude.
+         * @param {number} lon2 End longitude.
+         * @returns {number} Distance in nautical miles.
+         */
         haversineDistance(lat1, lon1, lat2, lon2) {
             const cacheKey = `${lat1.toFixed(4)}-${lon1.toFixed(4)}-${lat2.toFixed(4)}-${lon2.toFixed(4)}`;
             if (this._cache.has(cacheKey)) {
@@ -941,6 +1166,14 @@ if (window.tailwind) {
             return result;
         },
         
+        /**
+         * Initial great-circle bearing from one point to another.
+         * @param {number} lat1 Start latitude.
+         * @param {number} lon1 Start longitude.
+         * @param {number} lat2 End latitude.
+         * @param {number} lon2 End longitude.
+         * @returns {number} Bearing in degrees true, normalised to 0–360.
+         */
         bearing(lat1, lon1, lat2, lon2) {
             const lat1Rad = this.toRad(lat1);
             const lat2Rad = this.toRad(lat2);
@@ -951,7 +1184,19 @@ if (window.tailwind) {
             return (this.toDeg(Math.atan2(y, x)) + 360) % 360;
         },
         
-        // Performance optimized screen positioning
+        /**
+         * Converts a geographic position to canvas coordinates, relative to the
+         * configured home position. North is up, so the compass bearing is rotated
+         * by −90° into canvas space.
+         * @param {number} lat Target latitude.
+         * @param {number} lon Target longitude.
+         * @param {number} maxRange Scope range in nautical miles.
+         * @param {number} centerX Canvas centre X.
+         * @param {number} centerY Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {?ScreenPosition} Screen position and distance, or `null` when
+         *   the target lies beyond `maxRange`.
+         */
         latLonToScreen(lat, lon, maxRange, centerX, centerY, radius) {
             const distNm = this.haversineDistance(state.homeLat, state.homeLon, lat, lon);
             if (distNm > maxRange) return null;
@@ -967,7 +1212,19 @@ if (window.tailwind) {
             };
         },
         
-        // Remove redundant trail storage
+        /**
+         * Projects a stored geographic trail to screen space.
+         *
+         * Trails are kept as lat/lon and converted per frame rather than cached as
+         * pixels, so a zoom or window resize re-projects history correctly instead
+         * of stretching it. Points outside the current range are omitted.
+         * @param {Array<TrailPoint>} geoTrail Stored trail points.
+         * @param {number} maxRange Scope range in nautical miles.
+         * @param {number} centerX Canvas centre X.
+         * @param {number} centerY Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {Array<{x: number, y: number, timestamp: number}>} Screen trail.
+         */
         geoTrailToScreen(geoTrail, maxRange, centerX, centerY, radius) {
             const screenTrail = [];
             for (let i = 0; i < geoTrail.length; i++) {
@@ -984,6 +1241,16 @@ if (window.tailwind) {
             return screenTrail;
         },
         
+        /**
+         * Dead-reckons a future position along a great circle, given a track and
+         * ground speed. Used to draw speed vectors.
+         * @param {number} lat Current latitude.
+         * @param {number} lon Current longitude.
+         * @param {number} track Track over ground, degrees true.
+         * @param {number} speedKts Ground speed in knots.
+         * @param {number} minutes Minutes to project ahead.
+         * @returns {{lat: number, lon: number}} Projected position.
+         */
         projectPosition(lat, lon, track, speedKts, minutes) {
             const distNm = (speedKts / 60) * minutes;
             const R = 3440.065;
@@ -1004,11 +1271,20 @@ if (window.tailwind) {
         }
     };
 
-    // Enhanced Tooltip Manager for mobile support
+    /**
+     * Positions tooltips so they follow the pointer and stay inside the
+     * viewport, with tap-to-show behaviour on touch devices.
+     * @namespace TooltipManager
+     */
     const TooltipManager = {
         activeTooltip: null,
         mobileTimeout: null,
         
+        /**
+         * Starts tracking the pointer for tooltip placement, and adds touch
+         * handling on touch-capable devices.
+         * @returns {void}
+         */
         init() {
             document.addEventListener('mousemove', (e) => {
                 const activeTooltip = document.querySelector('.tooltip:hover .tooltip-text');
@@ -1022,6 +1298,13 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Positions a tooltip near the pointer, nudging it back inside the
+         * viewport and flipping it below the cursor when there is no room above.
+         * @param {HTMLElement} tooltip Tooltip element.
+         * @param {(MouseEvent|Touch)} event Source of the coordinates.
+         * @returns {void}
+         */
         positionTooltip(tooltip, event) {
             const rect = tooltip.getBoundingClientRect();
             const viewportWidth = window.innerWidth;
@@ -1044,6 +1327,12 @@ if (window.tailwind) {
             tooltip.style.top = `${y}px`;
         },
         
+        /**
+         * Touch handler: shows the tooltip of the touched control, or dismisses
+         * the current one when the touch lands elsewhere.
+         * @param {TouchEvent} e
+         * @returns {void}
+         */
         handleMobileTouch(e) {
             const button = e.target.closest('.tooltip');
             if (button) {
@@ -1054,6 +1343,13 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Shows a tooltip for a touch target and schedules it to disappear after
+         * 3 seconds.
+         * @param {HTMLElement} button Element that owns the tooltip.
+         * @param {Touch} touch Touch point used for positioning.
+         * @returns {void}
+         */
         showMobileTooltip(button, touch) {
             this.hideMobileTooltip();
             
@@ -1069,6 +1365,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Hides the active touch tooltip and clears its auto-dismiss timer.
+         * @returns {void}
+         */
         hideMobileTooltip() {
             if (this.activeTooltip) {
                 this.activeTooltip.classList.remove('mobile-show');
@@ -1081,8 +1381,18 @@ if (window.tailwind) {
         }
     };
 
-    // Sound Manager
+    /**
+     * Web Audio alerts. Tones are synthesised on the fly, so the app ships no
+     * audio assets.
+     * @namespace SoundManager
+     */
     const SoundManager = {
+        /**
+         * Plays the two-tone emergency chirp (880 Hz dropping to 440 Hz over
+         * 500 ms). Silent unless the user enabled sound and the AudioContext has
+         * been unlocked by a click.
+         * @returns {void}
+         */
         playEmergencyAlert() {
             if (!state.soundEnabled || !audioContext) return;
             
@@ -1107,8 +1417,18 @@ if (window.tailwind) {
         }
     };
 
-    // Enhanced Theme Management
+    /**
+     * Applies and persists the UI theme, and resolves colour roles for the
+     * active scope theme.
+     * @namespace ThemeManager
+     */
     const ThemeManager = {
+        /**
+         * Applies the current UI theme by setting `data-ui-theme` on the root
+         * element (the CSS custom properties key off that attribute) and
+         * persists the choice.
+         * @returns {void}
+         */
         applyUiTheme() {
             try {
                 document.documentElement.setAttribute('data-ui-theme', state.uiTheme);
@@ -1122,6 +1442,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Debounced writer for the `adsbScope_uiTheme` key.
+         * @type {function(): void}
+         */
         debouncedSave: (() => {
             let timeout;
             return () => {
@@ -1132,6 +1456,14 @@ if (window.tailwind) {
             };
         })(),
         
+        /**
+         * Looks up a colour role in the active scope theme.
+         * @param {string} colorName Role: `background`, `grid`, `sweep`,
+         *   `aircraft`, `selected`, `emergency`, `ground`, `text`, `mlat`,
+         *   `adsb` or `other`.
+         * @returns {string} Hex colour, or magenta `#FF00FF` when the role is
+         *   missing — deliberately loud, so gaps are obvious on screen.
+         */
         getScopeThemeColor(colorName) {
             const themeKey = SCOPE_THEMES[state.scopeThemeIndex]?.key || 'classic';
             const colorConfig = SCOPE_THEME_COLORS[themeKey] || {};
@@ -1139,8 +1471,16 @@ if (window.tailwind) {
         }
     };
 
-    // Enhanced URL Validation
+    /**
+     * Validation and sanitisation of user-supplied data-source URLs.
+     * @namespace URLValidator
+     */
     const URLValidator = {
+        /**
+         * Parseable as a URL and served over HTTP(S).
+         * @param {string} string Candidate URL.
+         * @returns {boolean} True if valid.
+         */
         isValidUrl(string) {
             try {
                 const url = new URL(string);
@@ -1150,6 +1490,12 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Checks that a URL is well-formed and looks like an aircraft feed —
+         * `aircraft.json`, a `/data/` path, or any `.json` endpoint.
+         * @param {string} url Candidate URL.
+         * @returns {boolean} True if it is usable as a data source.
+         */
         isValidDataSourceUrl(url) {
             if (!this.isValidUrl(url)) return false;
             
@@ -1162,14 +1508,32 @@ if (window.tailwind) {
             return false;
         },
         
+        /**
+         * Strips whitespace and angle brackets from a URL before it is echoed
+         * back into the settings markup.
+         * @param {string} url Raw user input.
+         * @returns {string} Sanitised URL, or an empty string.
+         */
         sanitizeUrl(url) {
             if (!url) return '';
             return url.trim().replace(/[<>]/g, '');
         }
     };
 
-    // CSV Data Manager with performance optimizations
+    /**
+     * Loads and queries the static geographic reference data (airports,
+     * navaids and runways) from the OurAirports CSV files under `data/`.
+     * @namespace CSVDataManager
+     */
     const CSVDataManager = {
+        /**
+         * Loads the airport, navaid and runway CSVs in parallel.
+         *
+         * Uses `allSettled`, so one missing file degrades a single layer instead
+         * of leaving the map blank; each failure raises its own warning. The
+         * static scope layer is invalidated once the data lands.
+         * @returns {Promise<void>}
+         */
         async loadAllData() {
             try {
                 elements.loadingIndicator?.classList.remove('hidden');
@@ -1209,6 +1573,13 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Fetches one CSV file and hands it to a parser.
+         * @param {string} path URL of the CSV.
+         * @param {function(string): Array<Object>} parser Parser for this file.
+         * @returns {Promise<Array<Object>>} Parsed records.
+         * @throws {Error} If the response status is not OK.
+         */
         async loadCSV(path, parser) {
             const response = await fetch(path);
             if (!response.ok) {
@@ -1218,6 +1589,12 @@ if (window.tailwind) {
             return parser(text);
         },
         
+        /**
+         * Parses the OurAirports `airports.csv`, keeping only records with a
+         * position and a four-character ICAO code.
+         * @param {string} csvText Raw CSV.
+         * @returns {Array<Airport>} Parsed airports.
+         */
         parseAirports(csvText) {
             const lines = csvText.split('\n');
             const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
@@ -1252,6 +1629,12 @@ if (window.tailwind) {
             return airports;
         },
         
+        /**
+         * Parses the OurAirports `navaids.csv`, keeping records with a position
+         * and an identifier.
+         * @param {string} csvText Raw CSV.
+         * @returns {Array<Navaid>} Parsed navaids.
+         */
         parseNavaids(csvText) {
             const lines = csvText.split('\n');
             const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
@@ -1285,6 +1668,13 @@ if (window.tailwind) {
             return navaids;
         },
         
+        /**
+         * Parses the OurAirports `runways.csv`. Both thresholds must be
+         * georeferenced, and runways shorter than `state.minRunwayLength` are
+         * dropped so the scope is not littered with grass strips.
+         * @param {string} csvText Raw CSV.
+         * @returns {Array<Runway>} Runways long enough to draw.
+         */
         parseRunways(csvText) {
             const lines = csvText.split('\n');
             const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
@@ -1328,6 +1718,12 @@ if (window.tailwind) {
             return runways;
         },
         
+        /**
+         * Splits a single CSV line, honouring double-quoted fields that contain
+         * commas. Surrounding quotes are stripped from each value.
+         * @param {string} line One raw CSV record.
+         * @returns {Array<string>} Trimmed, unquoted field values.
+         */
         parseCSVLine(line) {
             const values = [];
             let current = '';
@@ -2086,7 +2482,17 @@ if (window.tailwind) {
             return merged;
         },
         
-        // Pre-filter invalid aircraft data
+        /**
+         * Validates and indexes a feed payload into `state.aircraftData`, keyed by
+         * uppercased hex, updating session statistics and raising emergency alerts
+         * for squawks listed in {@link CONFIG.EMERGENCY_SQUAWKS}.
+         *
+         * Invalid messages are filtered up front so the render loop never has to
+         * defend against them.
+         * @param {{aircraft: Array<AircraftMessage>, messages: number}} data
+         *   Merged feed payload.
+         * @returns {void}
+         */
         processAircraftData(data) {
             const newData = {};
             const aircraft = data.aircraft || [];
@@ -2114,6 +2520,11 @@ if (window.tailwind) {
             state.sessionStats.messagesReceived = data.messages || state.sessionStats.messagesReceived;
         },
         
+        /**
+         * Increments the mlat/ADS-B/other counters for one message.
+         * @param {AircraftMessage} aircraft Decoded message.
+         * @returns {void}
+         */
         updateStatistics(aircraft) {
             if (aircraft.mlat && aircraft.mlat.length > 0) {
                 state.sessionStats.sourceDistribution.mlat++;
@@ -2124,6 +2535,12 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Rejects messages that cannot be plotted: missing hex or position,
+         * NaN coordinates, or latitude/longitude out of range.
+         * @param {AircraftMessage} aircraft Candidate message.
+         * @returns {boolean} True if the message is plottable.
+         */
         isValidAircraft(aircraft) {
             return aircraft && 
                    'lat' in aircraft && 
@@ -2136,12 +2553,23 @@ if (window.tailwind) {
                    Math.abs(aircraft.lon) <= 180;
         },
         
+        /**
+         * Heuristic military check based on the ICAO address falling in the
+         * `ADF7C0`–`ADFFFF` or `AE0000`–`AE7FFF` blocks (US military allocations).
+         * @param {string} hex ICAO 24-bit address in hex.
+         * @returns {boolean} True if the address is in a military block.
+         */
         isMilitary(hex) {
             const icao = parseInt(hex, 16);
             return (icao >= 0xADF7C0 && icao <= 0xADFFFF) || 
                    (icao >= 0xAE0000 && icao <= 0xAE7FFF);
         },
         
+        /**
+         * Single-letter provenance badge for the aircraft table.
+         * @param {AircraftMessage} aircraft Decoded message.
+         * @returns {("M"|"A"|"O")} `M` mlat, `A` ADS-B, `O` other.
+         */
         getDataSourceIndicator(aircraft) {
             if (aircraft.mlat && aircraft.mlat.length > 0) return 'M';
             if (aircraft.adsb_version !== undefined) return 'A';
@@ -2249,7 +2677,20 @@ if (window.tailwind) {
             ctx.globalAlpha = 1.0;
         },
         
-        // Optimized aircraft rendering
+        /**
+         * Draws every tracked aircraft: trails, symbols and labels.
+         *
+         * Targets are first bucketed by category (emergency, selected, mlat, adsb,
+         * other) so each colour is set once per category instead of once per
+         * aircraft. Stale targets are dropped here, alpha is faded by time since
+         * last update, and labels are placed with collision avoidance against the
+         * labels already drawn this frame.
+         * @param {number} canvasWidth Canvas width in pixels.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawAircraft(canvasWidth, cx, cy, radius) {
             const ctx = elements.ctx;
             const currentTime = Date.now() / 1000;
@@ -2650,6 +3091,16 @@ if (window.tailwind) {
             return color;
         },
 
+        /**
+         * Draws a filled triangle pointing along the given heading. The triangle
+         * is defined nose-up around the origin and rotated, so 0° points north.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} centerX Centre X.
+         * @param {number} centerY Centre Y.
+         * @param {number} headingDegrees Heading in degrees true.
+         * @param {number} size Half-height of the symbol in pixels.
+         * @returns {void}
+         */
         drawHeadingTriangle(ctx, centerX, centerY, headingDegrees, size) {
             // Convert heading to radians and adjust for canvas coordinate system
             // (0° = North, but canvas 0° = East, so subtract 90°)
@@ -2696,6 +3147,14 @@ if (window.tailwind) {
             ctx.stroke();
         },
         
+        /**
+         * Draws the dashed vector from an aircraft to where it will be in
+         * {@link CONFIG.VECTOR_MINUTES} minutes at its current track and speed.
+         * @param {Object} ac Displayed aircraft entry.
+         * @param {number} x Current symbol X.
+         * @param {number} y Current symbol Y.
+         * @returns {void}
+         */
         drawSpeedVector(ac, x, y) {
             const ctx = elements.ctx;
             const projected = MathUtils.projectPosition(
@@ -2724,6 +3183,16 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Traces a rounded rectangle path. Does not fill or stroke.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} x Left edge.
+         * @param {number} y Top edge.
+         * @param {number} width Width in pixels.
+         * @param {number} height Height in pixels.
+         * @param {number} radius Corner radius.
+         * @returns {void}
+         */
         _drawRoundedRect(ctx, x, y, width, height, radius) {
             ctx.beginPath();
             ctx.moveTo(x + radius, y);
@@ -2738,6 +3207,13 @@ if (window.tailwind) {
             ctx.closePath();
         },
         
+        /**
+         * Axis-aligned rectangle overlap test with a 3 px breathing space, used
+         * for label collision detection.
+         * @param {{x: number, y: number, width: number, height: number}} r1
+         * @param {{x: number, y: number, width: number, height: number}} r2
+         * @returns {boolean} True if the rectangles (plus padding) intersect.
+         */
         _rectsIntersect(r1, r2) {
             const padding = 3; // a few pixels apart
             return !(r2.x > r1.x + r1.width + padding ||
@@ -2931,7 +3407,17 @@ if (window.tailwind) {
         // DEBUG
     };
 
-    // Enhanced UI Manager with DOM batching
+    /**
+     * Everything outside the canvas: the aircraft table, metrics panel, status
+     * bar, tooltips, popups and emergency banners.
+     *
+     * Panel refreshes are coalesced: each `update*` method flags the panel as
+     * dirty and {@link UIManager.batchUpdates} repaints them together on the
+     * next frame.
+     * @namespace UIManager
+     * @property {{aircraftList: boolean, metrics: boolean, status: boolean}}
+     *   pendingUpdates Panels awaiting a repaint.
+     */
     const UIManager = {
         pendingUpdates: {
             aircraftList: false,
@@ -2939,6 +3425,11 @@ if (window.tailwind) {
             status: false
         },
         
+        /**
+         * Flushes the pending panel updates inside a single animation frame, so a
+         * burst of state changes costs one layout pass rather than several.
+         * @returns {void}
+         */
         batchUpdates() {
             if (CONFIG.PERFORMANCE.BATCH_DOM_UPDATES) {
                 requestAnimationFrame(() => {
@@ -2958,6 +3449,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Queues (or performs) an aircraft-list refresh.
+         * @returns {void}
+         */
         updateAircraftList() {
             if (CONFIG.PERFORMANCE.BATCH_DOM_UPDATES) {
                 this.pendingUpdates.aircraftList = true;
@@ -2967,6 +3462,12 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Rebuilds the aircraft table, sorted by distance from home. Rows are
+         * assembled into a DocumentFragment so the table is touched once instead
+         * of once per row.
+         * @returns {void}
+         */
         updateAircraftListInternal() {
             const sortedAircraft = Object.values(state.displayedAircraft)
                 .sort((a, b) => (a.dist ?? Infinity) - (b.dist ?? Infinity));
@@ -3011,6 +3512,11 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Renders a condensed 10-row aircraft list for narrow viewports.
+         * @param {Array<Object>} sortedAircraft Aircraft ordered by distance.
+         * @returns {void}
+         */
         updateMobileAircraftList(sortedAircraft) {
             const mobileList = document.getElementById('mobile-aircraft-list');
             if (mobileList) {
@@ -3024,6 +3530,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Queues (or performs) a metrics-panel refresh.
+         * @returns {void}
+         */
         updateMetricsPanel() {
             if (CONFIG.PERFORMANCE.BATCH_DOM_UPDATES) {
                 this.pendingUpdates.metrics = true;
@@ -3033,6 +3543,11 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Renders the metrics panel (and its mobile mirror) from
+         * {@link UIManager.calculateMetrics}.
+         * @returns {void}
+         */
         updateMetricsPanelInternal() {
             const stats = this.calculateMetrics();
             const metricItem = (label, value) => 
@@ -3079,6 +3594,12 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Single pass over the displayed aircraft computing every metric the panel
+         * needs: counts, averages and the closest/fastest/highest/lowest records.
+         * Ground traffic is excluded from the altitude statistics.
+         * @returns {Object} Formatted metrics, ready to interpolate into HTML.
+         */
         calculateMetrics() {
             const uptime = ((Date.now() - state.sessionStats.startTime) / 1000 / 60).toFixed(1);
             let fastest = { gs: 0 };
@@ -3157,6 +3678,10 @@ if (window.tailwind) {
             };
         },
         
+        /**
+         * Queues (or performs) a status-bar refresh.
+         * @returns {void}
+         */
         updateScopeStatus() {
             if (CONFIG.PERFORMANCE.BATCH_DOM_UPDATES) {
                 this.pendingUpdates.status = true;
@@ -3166,6 +3691,11 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Renders the status bar: range, connection state with indicator, tracked
+         * count, active filter, CSV load counts and home position.
+         * @returns {void}
+         */
         updateScopeStatusInternal() {
             const dataStatus = state.dataLoaded ? 
                 `DATA: ${state.airports.length}A/${state.navaids.length}N/${state.runways.length}R` :
@@ -3227,6 +3757,12 @@ if (window.tailwind) {
             if (runwaysTooltip) runwaysTooltip.textContent = `Runways: ${state.showRunways ? 'ON' : 'OFF'}`;
         },
         
+        /**
+         * Keeps the open aircraft popup anchored to its target as the target
+         * moves, flipping sides when it would overflow the canvas. Driven by a
+         * 100 ms interval while a popup is open.
+         * @returns {void}
+         */
         updatePopup() {
             if (state.popupAircraft && !elements.aircraftPopup.classList.contains('hidden')) {
                 const aircraft = state.displayedAircraft[state.popupAircraft];
@@ -3251,6 +3787,14 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Shows the airport info popup (name, location, elevation, type, runway
+         * identifiers), flipped to stay inside the canvas, auto-hiding after 5 s.
+         * @param {Airport} airport Airport that was clicked.
+         * @param {number} x Click X, canvas-relative.
+         * @param {number} y Click Y, canvas-relative.
+         * @returns {void}
+         */
         showAirportPopup(airport, x, y) {
             if (!elements.airportPopup) return;
             
@@ -3385,6 +3929,11 @@ if (window.tailwind) {
             this.downloadFile(csv, 'aircraft_data.csv', 'text/csv');
         },
         
+        /**
+         * Exports the tracked aircraft as KML placemarks for Google Earth.
+         * Altitudes are converted from feet to metres.
+         * @returns {void}
+         */
         exportKML() {
             const data = Object.values(state.displayedAircraft);
             
@@ -3411,6 +3960,11 @@ if (window.tailwind) {
             this.downloadFile(kml, 'aircraft_positions.kml', 'application/vnd.google-earth.kml+xml');
         },
         
+        /**
+         * Exports a JSON snapshot of session stats, current traffic, averages,
+         * live records and the active configuration.
+         * @returns {void}
+         */
         exportStatistics() {
             const stats = UIManager.calculateMetrics();
             const exportData = {
@@ -3449,6 +4003,14 @@ if (window.tailwind) {
             this.downloadFile(JSON.stringify(exportData, null, 2), 'adsb_statistics.json', 'application/json');
         },
         
+        /**
+         * Triggers a browser download from an in-memory string via a temporary
+         * object URL, which is revoked immediately afterwards.
+         * @param {string} content File contents.
+         * @param {string} filename Suggested filename.
+         * @param {string} mimeType MIME type for the blob.
+         * @returns {void}
+         */
         downloadFile(content, filename, mimeType) {
             const blob = new Blob([content], { type: mimeType });
             const url = URL.createObjectURL(blob);
@@ -3462,8 +4024,22 @@ if (window.tailwind) {
         }
     };
 
-    // Enhanced Aircraft State Manager (geographic-only trail storage)
+    /**
+     * Bridge between the raw feed (`state.aircraftData`) and what is on screen
+     * (`state.displayedAircraft`). Owns sweep-gated updates and the geographic
+     * trail buffers.
+     * @namespace AircraftStateManager
+     */
     const AircraftStateManager = {
+        /**
+         * Promotes freshly fetched aircraft into the displayed set, but only as
+         * the sweep passes over them — which is what produces the characteristic
+         * radar "paint" instead of every target jumping at once.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         updateAircraftState(cx, cy, radius) {
             const currentTime = Date.now() / 1000;
             state.sessionStats.maxConcurrent = Math.max(
@@ -3501,6 +4077,14 @@ if (window.tailwind) {
             });
         },
         
+        /**
+         * Applies the display filters: an aircraft needs either a barometric
+         * altitude or a ground flag, and must match the active
+         * all/military/civilian filter.
+         * @param {AircraftMessage} aircraft Decoded message.
+         * @param {string} hex Uppercased ICAO hex address.
+         * @returns {boolean} True if it should be drawn.
+         */
         shouldDisplayAircraft(aircraft, hex) {
             if (typeof aircraft.alt_baro !== 'number' && !aircraft.gnd) return false;
             
@@ -3510,6 +4094,12 @@ if (window.tailwind) {
             return true;
         },
         
+        /**
+         * Tests whether a bearing was crossed by the sweep between the previous
+         * frame and this one, handling the 360°→0° wrap.
+         * @param {number} sweepBrng Bearing in sweep (screen) degrees.
+         * @returns {boolean} True if the sweep passed over it this frame.
+         */
         isInSweepArea(sweepBrng) {
             if (state.sweepAngle > state.prevSweepAngle) {
                 return sweepBrng > state.prevSweepAngle && sweepBrng <= state.sweepAngle;
@@ -3666,6 +4256,15 @@ if (window.tailwind) {
             state.timeouts = [];
         },
         
+        /**
+         * Adds a listener and records it so {@link EventHandlers.cleanup} can
+         * remove it later. No-ops when the element is missing.
+         * @param {?EventTarget} element Target to bind to.
+         * @param {string} event Event name.
+         * @param {EventListener} handler Callback.
+         * @param {(boolean|AddEventListenerOptions)} [options] Listener options.
+         * @returns {void}
+         */
         addEventListenerWithCleanup(element, event, handler, options) {
             if (element) {
                 element.addEventListener(event, handler, options);
@@ -3673,7 +4272,12 @@ if (window.tailwind) {
             }
         },
         
-        // Debounced resize handler
+        /**
+         * Builds a resize handler debounced by
+         * {@link CONFIG.PERFORMANCE.DEBOUNCE_RESIZE_MS}, which marks the scope for
+         * redraw and rebuilds the offscreen canvas at the new size.
+         * @returns {function(): void} The debounced handler.
+         */
         createDebouncedResize() {
             let resizeTimeout;
             return () => {
@@ -3687,6 +4291,14 @@ if (window.tailwind) {
             };
         },
         
+        /**
+         * Binds every application listener: delegation, dropdowns, toolbar
+         * toggles, modals, collapsible sections, panel resizing, canvas
+         * interaction, keyboard shortcuts, the debounced window resize and the
+         * mobile menu. The AudioContext is created lazily on the first click,
+         * because browsers reject one built without a user gesture.
+         * @returns {void}
+         */
         initializeEventListeners() {
             // Event delegation for dynamic elements
             this.setupEventDelegation();
@@ -3784,7 +4396,12 @@ if (window.tailwind) {
             this.addEventListenerWithCleanup(document, 'click', initAudio);
         },
         
-        // Event delegation for dynamic elements
+        /**
+         * Installs a single delegated click handler on the aircraft table body,
+         * so the rows can be re-rendered freely without rebinding listeners.
+         * Clicking the selected row deselects it.
+         * @returns {void}
+         */
         setupEventDelegation() {
             // Delegate aircraft list clicks
             this.addEventListenerWithCleanup(elements.aircraftListBody, 'click', (e) => {
@@ -3798,6 +4415,12 @@ if (window.tailwind) {
             });
         },
         
+        /**
+         * Wires the UI-theme and scope-theme dropdowns (desktop menus and mobile
+         * selects), including the document-level click handler that closes any
+         * open menu or popup.
+         * @returns {void}
+         */
         setupDropdowns() {
             const toggleDropdown = (menu) => {
                 document.querySelectorAll('.dropdown-menu').forEach(m => {
@@ -3854,11 +4477,20 @@ if (window.tailwind) {
             });
         },
         
+        /**
+         * Opens/closes the mobile slide-out menu and its backdrop.
+         * @returns {void}
+         */
         toggleMobileMenu() {
             elements.mobileMenu?.classList.toggle('active');
             elements.mobileOverlay?.classList.toggle('active');
         },
         
+        /**
+         * Shows/hides the right-hand panel together with its resizer, and updates
+         * the button tooltip to match.
+         * @returns {void}
+         */
         togglePanels() {
             const hiding = !elements.rightPanel.classList.contains('hidden');
             elements.rightPanel.classList.toggle('hidden', hiding);
@@ -3870,6 +4502,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Toggles the projected speed vectors.
+         * @returns {void}
+         */
         toggleVectors() {
             state.showVectors = !state.showVectors;
             UIManager.updateTooltips();
@@ -3880,6 +4516,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Toggles aircraft trail rendering.
+         * @returns {void}
+         */
         toggleTrails() {
             state.showTrails = !state.showTrails;
             UIManager.updateTooltips();
@@ -3890,6 +4530,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Toggles airport rendering. Invalidates the static scope cache.
+         * @returns {void}
+         */
         toggleAirports() {
             state.showAirports = !state.showAirports;
             UIManager.updateTooltips();
@@ -3901,6 +4545,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Toggles navaid rendering. Invalidates the static scope cache.
+         * @returns {void}
+         */
         toggleNavaids() {
             state.showNavaids = !state.showNavaids;
             UIManager.updateTooltips();
@@ -3912,6 +4560,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Toggles runway rendering. Invalidates the static scope cache.
+         * @returns {void}
+         */
         toggleRunways() {
             state.showRunways = !state.showRunways;
             UIManager.updateTooltips();
@@ -3923,6 +4575,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Expands/collapses the aircraft list section and persists the choice.
+         * @returns {void}
+         */
         toggleAircraftSection() {
             state.aircraftSectionExpanded = !state.aircraftSectionExpanded;
             const section = elements.aircraftSection;
@@ -3941,6 +4597,10 @@ if (window.tailwind) {
             this.saveUIState();
         },
         
+        /**
+         * Expands/collapses the metrics panel section and persists the choice.
+         * @returns {void}
+         */
         toggleMetricsSection() {
             state.metricsSectionExpanded = !state.metricsSectionExpanded;
             const section = elements.metricsSection;
@@ -4080,6 +4740,10 @@ if (window.tailwind) {
             `).join('');
         },
         
+        /**
+         * Appends a blank, disabled data source row to the settings modal.
+         * @returns {void}
+         */
         addDataSource() {
             state.dataSources.push({
                 url: '',
@@ -4089,6 +4753,12 @@ if (window.tailwind) {
             this.updateDataSourcesList();
         },
         
+        /**
+         * Removes a data source, refusing to delete the last remaining one.
+         * Exposed on `window.EventHandlers` for the inline Remove buttons.
+         * @param {number} index Index into `state.dataSources`.
+         * @returns {void}
+         */
         removeDataSource(index) {
             if (state.dataSources.length > 1) {
                 state.dataSources.splice(index, 1);
@@ -4096,6 +4766,13 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Reads every settings-modal field back into {@link state}, validates the
+         * data sources (at least one enabled source must have a valid URL) and
+         * persists the result. Clears `displayedAircraft` so the new home
+         * position and range take effect on the next sweep.
+         * @returns {void}
+         */
         saveSettings() {
             try {
                 state.homeLat = parseFloat(document.getElementById('home-lat').value) || CONFIG.DEFAULT_HOME_LAT;
@@ -4260,6 +4937,11 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Debounced writer for the `adsbScope_settings` key, so rapid saves
+         * collapse into a single localStorage write.
+         * @type {function(Object): void}
+         */
         debouncedSaveSettings: (() => {
             let timeout;
             return (settings) => {
@@ -4270,6 +4952,11 @@ if (window.tailwind) {
             };
         })(),
         
+        /**
+         * Persists the lightweight UI state (panel expansion, selected aircraft,
+         * current range) that changes far more often than the settings blob.
+         * @returns {void}
+         */
         saveUIState() {
             try {
                 const uiState = {
@@ -4289,6 +4976,10 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Debounced writer for the `adsbScope_uiState` key.
+         * @type {function(Object): void}
+         */
         debouncedSaveUIState: (() => {
             let timeout;
             return (uiState) => {
@@ -4352,6 +5043,13 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Mouse-wheel zoom. Scrolling up widens the range, down narrows it, in
+         * {@link CONFIG.RANGE_STEP_NM} increments clamped to
+         * `MIN_RANGE_NM`/`MAX_RANGE_NM`. Forces a static-layer redraw.
+         * @param {WheelEvent} e
+         * @returns {void}
+         */
         handleMouseWheel(e) {
             e.preventDefault();
             const oldRange = state.maxRangeNm;
@@ -4368,6 +5066,13 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Turns a resizer element into a horizontal drag handle for a side panel,
+         * clamped to {@link CONFIG.MIN_PANEL_WIDTH}.
+         * @param {?HTMLElement} panel Panel being resized.
+         * @param {?HTMLElement} resizer Grab handle.
+         * @returns {void}
+         */
         makeResizable(panel, resizer) {
             if (!panel || !resizer) return;
             
@@ -4694,6 +5399,16 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * One frame of the render loop. Throttles to
+         * {@link CONFIG.CANVAS_RENDER_THROTTLE_MS}, resizes the canvas when the
+         * container changes, advances the sweep angle, repaints the scope,
+         * aircraft and sweep, refreshes the side panels at the slower
+         * {@link CONFIG.UI_UPDATE_INTERVAL_MS} cadence and recomputes FPS once a
+         * second. Errors are caught so a single bad frame cannot kill the loop.
+         * @param {DOMHighResTimeStamp} time Timestamp supplied by rAF.
+         * @returns {void}
+         */
         update(time) {
             try {
                 // Frame rate throttling
@@ -4787,8 +5502,22 @@ if (window.tailwind) {
         }
     };
 
-    // Initialization with performance optimizations
+    /**
+     * Application bootstrapper. Owns the startup sequence and the matching
+     * teardown, and is the only module that talks to localStorage on load.
+     * @namespace App
+     */
     const App = {
+        /**
+         * Boots the application: restores settings, builds the theme menus and
+         * shortcut bar, wires up every event listener, schedules memory cleanup,
+         * loads the airport/navaid/runway CSVs, starts the polling interval and
+         * kicks off the render loop.
+         *
+         * Runs on `DOMContentLoaded` (or immediately if the DOM is already
+         * parsed). Any failure is contained by {@link ErrorBoundary}.
+         * @returns {void}
+         */
         init() {
             try {
                 // Set up page title and version
@@ -4843,6 +5572,17 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Restores state from the three localStorage keys written by the app:
+         * `adsbScope_settings`, `adsbScope_uiState` and `adsbScope_uiTheme`.
+         * Booleans are compared strictly so a stale truthy value cannot enable
+         * a feature the user turned off. Falls back to {@link CONFIG} defaults.
+         *
+         * Also restores the moving-receiver settings and the display and
+         * performance values, which live on {@link CONFIG} because the rest of
+         * the code reads them from there directly.
+         * @returns {void}
+         */
         loadSettings() {
             try {
                 // Load main settings
@@ -4916,6 +5656,11 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Applies the persisted expanded/collapsed state to the aircraft and
+         * metrics side panels, including the rotation of their chevron icons.
+         * @returns {void}
+         */
         initializeCollapsibleSections() {
             if (elements.aircraftSection) {
                 elements.aircraftSection.classList.add(state.aircraftSectionExpanded ? 'section-expanded' : 'section-collapsed');
@@ -4934,6 +5679,12 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Populates the UI-theme dropdown (grouped by `Dark`/`Light`), the
+         * scope-theme dropdown and their mobile `<select>` equivalents from
+         * {@link UI_THEMES} and {@link SCOPE_THEMES}.
+         * @returns {void}
+         */
         initializeThemeMenus() {
             try {
                 // UI Theme Menu
@@ -5004,7 +5755,10 @@ if (window.tailwind) {
         }
     };
 
-    // Global error handler
+    /**
+     * Global safety net: routes uncaught exceptions and unhandled promise
+     * rejections into the ErrorBoundary so nothing fails silently.
+     */
     window.addEventListener('error', (e) => {
         ErrorBoundary.handleError(e.error, 'Global');
     });
