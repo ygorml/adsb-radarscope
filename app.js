@@ -1968,15 +1968,35 @@ if (window.tailwind) {
                      r2.y + r2.height < r1.y - padding);
         },
 
+        /**
+         * Draws the data block for an aircraft with a leader line back to the
+         * symbol: the callsign alone, or — when extended labels are on, the `D`
+         * key — followed by altitude and ground speed, then heading and squawk.
+         *
+         * Twelve candidate positions are tried on a circle around the target; the
+         * first that stays on-canvas and does not overlap an already-placed label
+         * wins. If all twelve collide the label is skipped rather than drawn
+         * illegibly on top of another.
+         * @param {Object} ac Displayed aircraft entry.
+         * @param {number} aircraftX Symbol X.
+         * @param {number} aircraftY Symbol Y.
+         * @param {number} canvasWidth Canvas width, for edge clamping.
+         * @param {string} color Label colour.
+         * @param {Array<Object>} drawnLabels Rectangles already placed this frame;
+         *   appended to on success.
+         * @returns {void}
+         */
         drawAircraftLabels(ac, aircraftX, aircraftY, canvasWidth, color, drawnLabels) {
             const ctx = elements.ctx;
         
-            // Define label content and properties
-            const lines = [
-                (ac.data.flight || 'N/A').trim(),
-                `${ac.data.alt_baro || '???'}ft | ${ac.data.gs || '???'}kt`,
-                `HDG ${ac.data.track || '???'}° | SQK ${ac.data.squawk || '????'}`
-            ];
+            // The callsign is always shown; the telemetry lines are the
+            // "extended labels" the D key toggles.
+            const lines = [(ac.data.flight || 'N/A').trim()];
+            if (state.showLabelDetails) {
+                lines.push(`${ac.data.alt_baro || '???'}ft | ${ac.data.gs || '???'}kt`);
+                lines.push(`HDG ${ac.data.track || '???'}° | SQK ${ac.data.squawk || '????'}`);
+            }
+
             const padding = 4;
             const line1Height = 12;
             const otherLineHeight = 10;
@@ -1984,13 +2004,16 @@ if (window.tailwind) {
         
             // Measure text to get box dimensions
             ctx.font = 'bold 12px monospace';
-            const width1 = ctx.measureText(lines[0]).width;
+            let maxWidth = ctx.measureText(lines[0]).width;
             ctx.font = '10px monospace';
-            const width2 = ctx.measureText(lines[1]).width;
-            const width3 = ctx.measureText(lines[2]).width;
+            for (let i = 1; i < lines.length; i++) {
+                maxWidth = Math.max(maxWidth, ctx.measureText(lines[i]).width);
+            }
             
-            const labelWidth = Math.max(width1, width2, width3) + (padding * 2);
-            const labelHeight = line1Height + (otherLineHeight * 2) + (lineSpacing * 2) + (padding * 2);
+            const labelWidth = maxWidth + (padding * 2);
+            const labelHeight = line1Height +
+                                ((otherLineHeight + lineSpacing) * (lines.length - 1)) +
+                                (padding * 2);
         
             // Define candidate positions
             const candidatePositions = [];
@@ -2462,18 +2485,26 @@ if (window.tailwind) {
             }, 5000);
         },
         
+        /**
+         * Renders the keyboard-shortcut legend into both the bottom bar and the
+         * help modal from a single source of truth.
+         * @returns {void}
+         */
         createShortcutBar() {
             const shortcuts = {
-                "H": "Help",
-                "D": "Debug Info",
+                "H / ?": "Help",
                 "Space": "Pause",
                 "+/-/Scroll": "Range",
+                "Click ring": "Zoom to ring",
+                "R": "Reset view",
                 "M": "Mil/Civ/All",
                 "V": "Vectors",
                 "T": "Trails", 
                 "A": "Airports",
                 "N": "Navaids",
-                "R": "Runways",
+                "W": "Runways",
+                "D": "Label details",
+                "I": "Debug info",
                 "S": "Settings"
             };
             
@@ -3286,6 +3317,38 @@ if (window.tailwind) {
             };
         })(),
         
+        /**
+         * Discards every stored setting and reloads, so the next start comes
+         * from {@link CONFIG} alone.
+         *
+         * This is the only way back to the `config.js` defaults once settings
+         * have been saved, since stored values shadow them on every load.
+         * @returns {void}
+         */
+        clearStorage() {
+            if (!window.confirm(
+                    'Discard all saved settings and reload using the config.js defaults?')) {
+                return;
+            }
+
+            try {
+                ['adsbScope_settings', 'adsbScope_uiState', 'adsbScope_uiTheme']
+                    .forEach(key => localStorage.removeItem(key));
+            } catch (error) {
+                ErrorBoundary.handleError(error, 'Clear Storage');
+                return;
+            }
+
+            elements.settingsModal?.classList.add('hidden');
+            ErrorBoundary.showWarning('Stored settings cleared — reloading');
+            const timeout = setTimeout(() => window.location.reload(), 400);
+            state.timeouts.push(timeout);
+        },
+
+        /**
+         * Prompts for an export format and delegates to {@link ExportManager}.
+         * @returns {void}
+         */
         showExportMenu() {
             const options = ['CSV', 'KML', 'Statistics'];
             const choice = prompt(`Export format?\n1. CSV\n2. KML\n3. Statistics\nEnter number (1-3):`);
@@ -3344,8 +3407,21 @@ if (window.tailwind) {
             });
         },
         
+        /**
+         * Canvas click handler. Airports are hit-tested first (within
+         * `SYMBOL_SIZE + 5` px), then aircraft within
+         * {@link CONFIG.CLICK_RADIUS_PX}; the nearest one wins. Selecting an
+         * aircraft opens the detail popup and starts a 100 ms interval that keeps
+         * the popup pinned to the moving target. Clicking empty space closes it.
+         * @param {MouseEvent} e
+         * @returns {void}
+         */
         handleCanvasClick(e) {
             e.stopPropagation();
+
+            // Range rings first: they are the coarsest target, but only claim
+            // the click when nothing more specific is under the cursor.
+            if (this.handleRangeRingClick(e)) return;
             
             // Check for airport clicks first
             if (state.showAirports) {
@@ -3422,9 +3498,108 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Zooms to a range ring when the click lands on one.
+         *
+         * The four rings mark a quarter, half, three quarters and all of the
+         * current range, so clicking one sets the range to the distance that
+         * ring represents — a fast way down from 200 nm to 50 nm.
+         *
+         * Yields to aircraft and airports: a click within
+         * {@link CONFIG.CLICK_RADIUS_PX} of a target is a selection, not a zoom.
+         * @param {MouseEvent} e Canvas click.
+         * @returns {boolean} True if the click was consumed as a zoom.
+         */
+        handleRangeRingClick(e) {
+            const cx = elements.canvas.width / 2;
+            const cy = elements.canvas.height / 2;
+            const radius = Math.min(cx, cy) - CONFIG.CANVAS_PADDING;
+            if (!(radius > 0)) return false;
+
+            const fromCentre = Math.hypot(e.offsetX - cx, e.offsetY - cy);
+
+            // Anything close to a drawn target belongs to that target.
+            for (const hex in state.displayedAircraft) {
+                const ac = state.displayedAircraft[hex];
+                if (!ac.displayPos) continue;
+                if (Math.hypot(e.offsetX - ac.displayPos.x, e.offsetY - ac.displayPos.y)
+                        < CONFIG.CLICK_RADIUS_PX) {
+                    return false;
+                }
+            }
+            if (state.showAirports) {
+                const airports = CSVDataManager.getAirportsInRange(
+                    state.homeLat, state.homeLon, state.maxRangeNm);
+                for (const airport of airports) {
+                    const pos = MathUtils.latLonToScreen(
+                        airport.lat, airport.lon, state.maxRangeNm, cx, cy, radius);
+                    if (pos && Math.hypot(e.offsetX - pos.x, e.offsetY - pos.y)
+                            < CONFIG.AIRPORT_DISPLAY.SYMBOL_SIZE + 5) {
+                        return false;
+                    }
+                }
+            }
+
+            for (let i = 1; i <= 4; i++) {
+                const ringRadius = radius * (i / 4);
+                if (Math.abs(fromCentre - ringRadius) > EventHandlers.RING_CLICK_TOLERANCE_PX) {
+                    continue;
+                }
+
+                const target = Math.round(
+                    (state.maxRangeNm * (i / 4)) / CONFIG.RANGE_STEP_NM) * CONFIG.RANGE_STEP_NM;
+                const clamped = Math.min(CONFIG.MAX_RANGE_NM,
+                                         Math.max(CONFIG.MIN_RANGE_NM, target));
+
+                if (clamped !== state.maxRangeNm) {
+                    state.lastRangeNm = state.maxRangeNm;
+                    state.maxRangeNm = clamped;
+                    this.saveUIState();
+                    Renderer.markForRedraw();
+                }
+                return true;
+            }
+
+            return false;
+        },
+
+        /**
+         * How near a range ring a click has to land to count as a ring click.
+         * @type {number}
+         */
+        RING_CLICK_TOLERANCE_PX: 8,
+
+        /**
+         * Global keyboard shortcut handler.
+         *
+         * `H` or `?` help, `Space` pause, `+`/`-` range, `R` reset view,
+         * `M` cycle all/military/civilian filter, `V` vectors, `T` trails,
+         * `A` airports, `N` navaids, `W` runways, `D` extended labels,
+         * `I` debug overlay, `S` settings, `Escape` close modals.
+         *
+         * Returns early when the event came from a form control, so typing a
+         * latitude or a URL in the settings panel does not also drive the scope.
+         * @param {KeyboardEvent} e
+         * @returns {void}
+         */
         handleKeydown(e) {
+            // Shortcuts must not fire while the user is filling in the settings
+            // form: typing a latitude would otherwise change the range twice.
+            const target = e.target;
+            if (target && (target.tagName === 'INPUT' ||
+                           target.tagName === 'TEXTAREA' ||
+                           target.tagName === 'SELECT' ||
+                           target.isContentEditable)) {
+                return;
+            }
+
             switch(e.key.toLowerCase()) {
-                case 'd': // DEBUG
+                case 'd':
+                    state.showLabelDetails = !state.showLabelDetails;
+                    Renderer.markForRedraw();
+                    UIManager.updateTooltips();
+                    break;
+                case 'i':
                     state.showDebugInfo = !state.showDebugInfo;
                     break;
                 case ' ':
@@ -3432,7 +3607,12 @@ if (window.tailwind) {
                     state.isPaused = !state.isPaused;
                     break;
                 case 'h':
+                case '?':
                     elements.helpModal?.classList.remove('hidden');
+                    break;
+                case 'escape':
+                    elements.helpModal?.classList.add('hidden');
+                    elements.settingsModal?.classList.add('hidden');
                     break;
                 case '+':
                 case '=':
@@ -3460,25 +3640,71 @@ if (window.tailwind) {
                 case 'n':
                     EventHandlers.toggleNavaids();
                     break;
-                case 'r':
+                case 'w':
                     EventHandlers.toggleRunways();
+                    break;
+                case 'r':
+                    EventHandlers.resetView();
                     break;
                 case 's':
                     EventHandlers.showSettings();
                     break;
             }
+        },
+
+        /**
+         * Returns the scope to its configured defaults: startup range, no
+         * selected aircraft, unpaused, filter back to `all`, popups closed.
+         *
+         * Deliberately leaves the home position, themes and layer toggles
+         * alone — this resets the *view*, not the configuration.
+         * @returns {void}
+         */
+        resetView() {
+            state.maxRangeNm = CONFIG.DEFAULT_RANGE_NM;
+            state.aircraftFilter = 'all';
+            state.selectedHex = null;
+            state.isPaused = false;
+
+            state.popupAircraft = null;
+            if (state.popupUpdateInterval) {
+                clearInterval(state.popupUpdateInterval);
+                state.popupUpdateInterval = null;
+            }
+            elements.aircraftPopup?.classList.add('hidden');
+            elements.airportPopup?.classList.add('hidden');
+
+            this.saveUIState();
+            Renderer.markForRedraw();
+            UIManager.updateAircraftList();
         }
     };
 
-    // Main Loop with throttling
+    /**
+     * The requestAnimationFrame driver. Everything that must happen per
+     * frame — sweep advance, aircraft state update, painting and throttled UI
+     * refresh — is sequenced here.
+     * @namespace ScopeLoop
+     * @property {?number} animationId Handle of the pending frame, if any.
+     * @property {number} lastFrameTime Timestamp of the last rendered frame.
+     */
     const ScopeLoop = {
         animationId: null,
         lastFrameTime: 0,
         
+        /**
+         * Schedules the first frame; {@link ScopeLoop.update} re-schedules itself
+         * from then on.
+         * @returns {void}
+         */
         start() {
             this.animationId = requestAnimationFrame((time) => this.update(time));
         },
         
+        /**
+         * Cancels the pending animation frame and halts the loop.
+         * @returns {void}
+         */
         stop() {
             if (this.animationId) {
                 cancelAnimationFrame(this.animationId);
