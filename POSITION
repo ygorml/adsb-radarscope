@@ -1,0 +1,40 @@
+# ADSB Radarscope — moving receiver position
+#
+# Rewrite this file from whatever produces your fix and the scope follows it.
+# Enable it in Settings > Moving Receiver, or set POSITION_FILE.ENABLED in
+# config.js. Blank lines and lines starting with # are ignored.
+#
+# Four formats are accepted. Use whichever your GPS source already emits:
+#
+#   1. Bare pair          -22.878029, -43.155934
+#                         -22.878029 -43.155934 180 3.0    (lat lon course speed)
+#
+#   2. KEY=VALUE          LAT=-22.878029
+#                         LON=-43.155934
+#                         HEADING=180
+#                         SPEED=3.0
+#
+#   3. JSON               {"lat": -22.878029, "lon": -43.155934,
+#                          "heading": 180, "speed": 3.0}
+#
+#   4. NMEA 0183          $GPRMC,123519,A,2252.682,S,04309.356,W,3.0,180.0,230925,,,A*XX
+#                         $GPGGA,123519,2252.682,S,04309.356,W,1,08,0.9,3.0,M,,,,*XX
+#
+# Course is degrees true, speed is knots; both are optional. With NMEA, the
+# last valid RMC or GGA sentence wins, so appending to a log works.
+#
+# Write to a temporary file and rename, so the scope never reads a half-written
+# file:
+#   while :; do gpspipe -w -n 5 | grep -m1 RMC > POSITION.tmp \
+#               && mv POSITION.tmp POSITION; sleep 1; done
+#
+# For testing without a GPS, tools/ship-sim.js takes a vessel up and down the
+# main channel of Guanabara Bay at 8 knots and rewrites this file each second:
+#   node tools/ship-sim.js
+#
+# Shipped values: Guanabara Bay, Rio de Janeiro, making 3 knots due south.
+
+LAT=-22.878028696269414
+LON=-43.15593411053736
+HEADING=180
+SPEED=3.0

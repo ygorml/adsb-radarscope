@@ -1,0 +1,21 @@
+{
+  "name": "adsb-radarscope-test",
+  "version": "0.0.2",
+  "private": true,
+  "description": "jsdom harness for ADSB Radarscope. Verification only — not required to run or ship the application.",
+  "license": "GPL-3.0-or-later",
+  "type": "commonjs",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
+  },
+  "scripts": {
+    "test": "node run.js && node features.js && node bugs.js && node multisource.js",
+    "test:runtime": "node run.js",
+    "test:features": "node features.js",
+    "test:defects": "node bugs.js",
+    "test:multisource": "node multisource.js"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}
