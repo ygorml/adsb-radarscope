@@ -79,37 +79,65 @@ const CONFIG = {
         MIN_RUNWAY_LENGTH_FT: 3000
     },
     
-    // Performance Tuning
+    // ---- Performance tuning --------------------------------------------
+    /**
+     * Optimisation switches. All default to on; turn one off to isolate a
+     * rendering or memory problem.
+     * @namespace CONFIG.PERFORMANCE
+     */
     PERFORMANCE: {
         // Canvas optimization
+        /** Render through an OffscreenCanvas where supported. @type {boolean} */
         USE_OFFSCREEN_CANVAS: true,
+        /** Cache rings, compass rose, airports and runways as a bitmap
+         * instead of redrawing them each frame. @type {boolean} */
         CACHE_STATIC_ELEMENTS: true,
+        /** Track dirty rectangles for partial repaints. @type {boolean} */
         DIRTY_REGION_TRACKING: true,
+        /** Upper bound on aircraft processed per frame. @type {number} */
         MAX_PARTICLES_PER_FRAME: 1000,
         
         // Memory management
+        /** Objects pre-allocated in the trail-point pool. @type {number} */
         OBJECT_POOL_SIZE: 100,
+        /** Use weak references for aircraft metadata. @type {boolean} */
         WEAK_REFERENCE_CLEANUP: true,
+        /** Request a GC pass after trail cleanup, where exposed. @type {boolean} */
         AGGRESSIVE_TRAIL_CLEANUP: true,
         
         // Network optimization
+        /** Share one in-flight promise per URL instead of issuing duplicate
+         * requests each tick. @type {boolean} */
         REQUEST_POOLING: true,
+        /** Queue requests behind NetworkRequestPool's concurrency limit
+         * instead of firing every feed and CSV at once. @type {boolean} */
         BATCH_NETWORK_REQUESTS: true,
-        RESPONSE_COMPRESSION: true,
         
         // DOM optimization
+        /** Coalesce panel repaints into one animation frame. @type {boolean} */
         BATCH_DOM_UPDATES: true,
+        /** Build table rows in a DocumentFragment. @type {boolean} */
         USE_DOCUMENT_FRAGMENT: true,
+        /** Debounce window resize handling, ms. @type {number} */
         DEBOUNCE_RESIZE_MS: 100,
         
         // State management
+        /** Deep-clone objects on assignment into state. @type {boolean} */
         IMMUTABLE_STATE_UPDATES: true,
+        /** Route state writes through a change-detecting Proxy. @type {boolean} */
         PROXY_STATE_DETECTION: true,
+        /** Debounce localStorage writes, ms. @type {number} */
         LOCALSTORAGE_DEBOUNCE_MS: 500
     }
 };
 
-// UI Theme Definitions
+/**
+ * Available interface themes, listed in the UI-theme dropdown.
+ *
+ * Each `key` matches a `[data-ui-theme="..."]` block in `styles.css` that
+ * defines the CSS custom properties; `group` is the dropdown heading.
+ * @type {Array<{key: string, name: string, group: ('Dark'|'Light')}>}
+ */
 const UI_THEMES = [
     { key: 'default-dark', name: 'Default Dark', group: 'Dark' },
     { key: 'slate', name: 'Slate', group: 'Dark' },

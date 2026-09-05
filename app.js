@@ -31,15 +31,37 @@ if (window.tailwind) {
 (function() {
     'use strict';
 
-    // State Management with Proxy Detection
+    /**
+     * Observable state container.
+     *
+     * Wraps a plain object in a Proxy so that assigning to any top-level
+     * property notifies the callbacks subscribed to it. Only the top level is
+     * observed — mutating a nested object in place fires nothing.
+     * @class
+     */
     class StateManager {
+        /**
+         * @param {Object} initialState Initial state shape.
+         */
         constructor(initialState) {
             this.listeners = new Map();
             this.state = this.createProxy(initialState);
         }
 
+        /**
+         * Wraps an object in a Proxy whose setter notifies subscribers on change.
+         *
+         * With {@link CONFIG.PERFORMANCE.IMMUTABLE_STATE_UPDATES} on, object values
+         * are deep-cloned on assignment so callers cannot mutate stored state
+         * behind the store's back — at the cost of a clone per write.
+         * @param {Object} obj Plain object to make reactive.
+         * @returns {Proxy<Object>} The observable state object.
+         */
         createProxy(obj) {
             const self = this;
+            // With change detection off the store is a plain object: writes are
+            // cheaper, but subscribers never fire.
+            if (!CONFIG.PERFORMANCE.PROXY_STATE_DETECTION) return obj;
             return new Proxy(obj, {
                 set(target, property, value) {
                     const oldValue = target[property];
@@ -213,8 +235,29 @@ if (window.tailwind) {
         }
     }
 
-    // Canvas Rendering with Offscreen Canvas and Caching
+    /**
+     * Renders the static layer of the scope — background, range rings, compass
+     * rose, airports, navaids and runways — and caches it as a bitmap.
+     *
+     * These elements only change when the range, layer toggles, theme, canvas
+     * size or home position change, so caching them keeps the per-frame cost to
+     * the moving parts: sweep, aircraft and trails.
+     *
+     * It also owns the dirty-region bookkeeping that lets a frame restore only
+     * the parts of that bitmap the previous frame painted over.
+     * @class
+     */
     class CanvasRenderer {
+        /**
+         * Fraction of the canvas above which partial restore stops paying for
+         * itself and a single full-canvas restore is used instead.
+         * @type {number}
+         */
+        static DIRTY_AREA_LIMIT = 0.55;
+
+        /**
+         * @param {CanvasRenderingContext2D} ctx Context of the visible canvas.
+         */
         constructor(ctx) {
             this.ctx = ctx;
             this.offscreenCanvas = null;
@@ -1051,51 +1094,154 @@ if (window.tailwind) {
             return values;
         },
         
+        /**
+         * Airports within a radius of a point, **nearest first**, capped at
+         * {@link CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY} so a dense area
+         * cannot flood the static layer. Sorting before the cap is what makes
+         * the cap mean "the closest N" rather than "whichever N the CSV lists
+         * first".
+         * @param {number} lat Centre latitude.
+         * @param {number} lon Centre longitude.
+         * @param {number} rangeNm Radius in nautical miles.
+         * @returns {Array<Airport>} Airports in range.
+         */
         getAirportsInRange(lat, lon, rangeNm) {
-            return state.airports.filter(airport => {
-                const dist = MathUtils.haversineDistance(lat, lon, airport.lat, airport.lon);
-                return dist <= rangeNm;
-            }).slice(0, CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY);
+            return state.airports
+                .map(airport => ({
+                    airport,
+                    dist: MathUtils.haversineDistance(lat, lon, airport.lat, airport.lon)
+                }))
+                .filter(entry => entry.dist <= rangeNm)
+                .sort((a, b) => a.dist - b.dist)
+                .slice(0, CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY)
+                .map(entry => entry.airport);
         },
         
+        /**
+         * Navaids within a radius of a point, nearest first, capped at
+         * {@link CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY}.
+         * @param {number} lat Centre latitude.
+         * @param {number} lon Centre longitude.
+         * @param {number} rangeNm Radius in nautical miles.
+         * @returns {Array<Navaid>} Navaids in range.
+         */
         getNavaidsInRange(lat, lon, rangeNm) {
-            return state.navaids.filter(navaid => {
-                const dist = MathUtils.haversineDistance(lat, lon, navaid.lat, navaid.lon);
-                return dist <= rangeNm;
-            }).slice(0, CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY);
+            return state.navaids
+                .map(navaid => ({
+                    navaid,
+                    dist: MathUtils.haversineDistance(lat, lon, navaid.lat, navaid.lon)
+                }))
+                .filter(entry => entry.dist <= rangeNm)
+                .sort((a, b) => a.dist - b.dist)
+                .slice(0, CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY)
+                .map(entry => entry.navaid);
         },
         
+        /**
+         * All runways belonging to one airport.
+         * @param {string} icao ICAO identifier.
+         * @returns {Array<Runway>} Matching runways (possibly empty).
+         */
         getRunwaysForAirport(icao) {
             return state.runways.filter(runway => runway.airport_ident === icao);
         }
     };
 
-    // Network Request Optimization with pooling
+    /**
+     * De-duplicates concurrent HTTP requests and enforces a hard timeout on
+     * each one.
+     * @class
+     */
     class NetworkRequestPool {
+        /**
+         * @param {void}
+         */
         constructor() {
             this.activeRequests = new Map();
             this.requestQueue = [];
             this.maxConcurrent = 5;
+            this.inFlight = 0;
         }
 
+        /**
+         * Fetches a URL, sharing the in-flight promise when the same URL is
+         * already being requested. Prevents a slow feed from stacking up
+         * duplicate requests each polling tick.
+         *
+         * The bookkeeping `.finally()` is followed by a `.catch()`: it returns a
+         * *derived* promise, and without that catch a failed request would
+         * surface as an `unhandledrejection` and raise a spurious error banner.
+         * @param {string} url Resource to fetch.
+         * @param {RequestInit} [options={}] Extra fetch options.
+         * @returns {Promise<Response>}
+         */
         async fetch(url, options = {}) {
             // Check if similar request is already in progress
             if (CONFIG.PERFORMANCE.REQUEST_POOLING && this.activeRequests.has(url)) {
                 return this.activeRequests.get(url);
             }
 
-            const requestPromise = this.executeRequest(url, options);
+            const requestPromise = CONFIG.PERFORMANCE.BATCH_NETWORK_REQUESTS
+                ? this.enqueue(url, options)
+                : this.executeRequest(url, options);
             
             if (CONFIG.PERFORMANCE.REQUEST_POOLING) {
                 this.activeRequests.set(url, requestPromise);
-                requestPromise.finally(() => {
-                    this.activeRequests.delete(url);
-                });
+                // .finally() returns a *derived* promise; without this catch its
+                // rejection is unhandled and reaches window.onunhandledrejection.
+                requestPromise
+                    .finally(() => { this.activeRequests.delete(url); })
+                    .catch(() => {});
             }
 
             return requestPromise;
         }
 
+        /**
+         * Queues a request behind {@link NetworkRequestPool#maxConcurrent}
+         * in-flight ones.
+         *
+         * Startup fires the three reference CSVs and every aircraft feed at
+         * once; without a ceiling those compete with each other and with the
+         * first frames of the render loop.
+         * @param {string} url Resource to fetch.
+         * @param {RequestInit} options Extra fetch options.
+         * @returns {Promise<Response>} Settles once the request has run.
+         */
+        enqueue(url, options) {
+            return new Promise((resolve, reject) => {
+                this.requestQueue.push({ url, options, resolve, reject });
+                this.drainQueue();
+            });
+        }
+
+        /**
+         * Starts queued requests while there is capacity, and re-drains as each
+         * one settles.
+         * @returns {void}
+         */
+        drainQueue() {
+            while (this.inFlight < this.maxConcurrent && this.requestQueue.length > 0) {
+                const job = this.requestQueue.shift();
+                this.inFlight++;
+                this.executeRequest(job.url, job.options)
+                    .then(job.resolve, job.reject)
+                    .finally(() => {
+                        this.inFlight--;
+                        this.drainQueue();
+                    });
+            }
+        }
+
+        /**
+         * Performs the actual fetch with an {@link AbortController} that fires
+         * after {@link CONFIG.FETCH_TIMEOUT_MS}, so a hung feed cannot stall the
+         * polling cycle. Caching is disabled to keep positions live.
+         * @param {string} url Resource to fetch.
+         * @param {RequestInit} options Extra fetch options.
+         * @returns {Promise<Response>}
+         * @throws {Error} On network failure or timeout abort.
+         */
         async executeRequest(url, options) {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), CONFIG.FETCH_TIMEOUT_MS);
@@ -1307,32 +1453,92 @@ if (window.tailwind) {
         }
     };
 
-    // Enhanced Rendering Engine with optimizations
+    /**
+     * Draws the dynamic layer of the scope: sweep, aircraft symbols, trails,
+     * speed vectors, data-block labels and the debug overlay. The static layer
+     * is delegated to {@link CanvasRenderer}.
+     * @namespace Renderer
+     * @property {boolean} needsRedraw Set when the static layer must be rebuilt.
+     */
     const Renderer = {
         lastRenderData: null,
         needsRedraw: true,
         lastFrameTime: 0,
         
+        /**
+         * Invalidates the current frame, forcing a repaint even while paused.
+         * @returns {void}
+         */
         markForRedraw() {
             this.needsRedraw = true;
         },
         
+        /**
+         * Paints the static layer — background, airports, navaids, runways, range
+         * rings and compass ticks — preferring the cached bitmap when one is valid.
+         *
+         * With dirty-region tracking on, only the rectangles the previous frame
+         * painted over are restored, which erases the moving layer without
+         * blitting the whole scope face. A rebuilt cache always lands in full.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawScope(cx, cy, radius) {
             if (!canvasRenderer) return;
 
-            // Use cached static elements if available
+            const cacheWasStale = this.needsRedraw;
             const staticCache = canvasRenderer.cacheStaticElements(cx, cy, radius);
-            if (staticCache && CONFIG.PERFORMANCE.CACHE_STATIC_ELEMENTS) {
-                elements.ctx.putImageData(staticCache, 0, 0);
-            } else {
+
+            if (!staticCache || !CONFIG.PERFORMANCE.CACHE_STATIC_ELEMENTS) {
                 canvasRenderer.drawStaticScope(elements.ctx, cx, cy, radius);
+                canvasRenderer.clearDirtyRegions();
+                return;
             }
+
+            // Restoring only the rectangles painted last frame erases the moving
+            // layer without repainting the whole scope face. A rebuilt cache has
+            // to land in full.
+            const regions = cacheWasStale ? null : canvasRenderer.collectDirtyRegions();
+
+            if (regions) {
+                for (const r of regions) {
+                    elements.ctx.putImageData(staticCache, 0, 0, r.x, r.y, r.width, r.height);
+                }
+            } else {
+                elements.ctx.putImageData(staticCache, 0, 0);
+            }
+
+            canvasRenderer.clearDirtyRegions();
         },
         
+        /**
+         * Draws the rotating sweep as ten trailing lines of decreasing opacity,
+         * which reads as a comet tail behind the leading edge.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawSweep(cx, cy, radius) {
             const ctx = elements.ctx;
             const sweepColor = ThemeManager.getScopeThemeColor('sweep');
-            
+
+            // Bounding box of the whole trailing fan, so the next frame knows
+            // what to erase.
+            if (canvasRenderer) {
+                let minX = cx, maxX = cx, minY = cy, maxY = cy;
+                for (let i = 0; i < 10; i++) {
+                    const a = MathUtils.toRad(state.sweepAngle - i * 0.2);
+                    const ex = cx + radius * Math.cos(a);
+                    const ey = cy + radius * Math.sin(a);
+                    minX = Math.min(minX, ex); maxX = Math.max(maxX, ex);
+                    minY = Math.min(minY, ey); maxY = Math.max(maxY, ey);
+                }
+                canvasRenderer.markDirty(minX, minY, maxX - minX, maxY - minY);
+            }
+
             for (let i = 0; i < 10; i++) {
                 const angleOffset = state.sweepAngle - i * 0.2;
                 const lineAngleRad = MathUtils.toRad(angleOffset);
@@ -1436,10 +1642,51 @@ if (window.tailwind) {
             
             if (!ac.geoTrail || ac.geoTrail.length < 2) return;
             
-            // Convert geographic trail to screen coordinates on-demand
-            const screenTrail = MathUtils.geoTrailToScreen(ac.geoTrail, state.maxRangeNm, cx, cy, radius);
+            // Convert geographic trail to screen coordinates on-demand, reusing
+            // the last projection while nothing that affects it has changed. The
+            // cache hangs off a WeakMap keyed by the aircraft entry, so it is
+            // reclaimed with the aircraft rather than needing explicit eviction.
+            const projectionKey = `${state.maxRangeNm}|${cx}|${cy}|${radius}|` +
+                                  `${state.homeLat}|${state.homeLon}|${ac.geoTrail.length}`;
+            let screenTrail = null;
+
+            if (CONFIG.PERFORMANCE.WEAK_REFERENCE_CLEANUP) {
+                const cached = aircraftReferences.get(ac);
+                if (cached && cached.projectionKey === projectionKey) {
+                    screenTrail = cached.screenTrail;
+                }
+            }
+
+            if (!screenTrail) {
+                screenTrail = MathUtils.geoTrailToScreen(ac.geoTrail, state.maxRangeNm, cx, cy, radius);
+                if (CONFIG.PERFORMANCE.WEAK_REFERENCE_CLEANUP) {
+                    aircraftReferences.set(ac, { projectionKey, screenTrail });
+                }
+            }
             
             if (screenTrail.length < 2) return;
+
+            // Cap the number of segments actually stroked. A 100-point trail
+            // reads identically at 40 segments and costs less than half as much,
+            // which is what makes long trails affordable in dense traffic.
+            const maxSegments = CONFIG.TRAIL_GRADIENT_SEGMENTS > 0
+                ? CONFIG.TRAIL_GRADIENT_SEGMENTS
+                : screenTrail.length;
+            const step = Math.max(1, Math.ceil((screenTrail.length - 1) / maxSegments));
+
+            // Bounding box of the trail, so the next frame can erase it.
+            if (canvasRenderer) {
+                let tMinX = Infinity, tMinY = Infinity, tMaxX = -Infinity, tMaxY = -Infinity;
+                for (const pt of screenTrail) {
+                    if (pt.x < tMinX) tMinX = pt.x;
+                    if (pt.x > tMaxX) tMaxX = pt.x;
+                    if (pt.y < tMinY) tMinY = pt.y;
+                    if (pt.y > tMaxY) tMaxY = pt.y;
+                }
+                const pad = state.trailWidth * 2;
+                canvasRenderer.markDirty(tMinX - pad, tMinY - pad,
+                                         (tMaxX - tMinX) + pad * 2, (tMaxY - tMinY) + pad * 2);
+            }
             
             // Get current aircraft position
             const currentX = ac.displayPos.x;
@@ -1448,11 +1695,11 @@ if (window.tailwind) {
             const bufferDistance = triangleSize + 3; // Triangle size plus 3px space
             
             // Draw trail segments with time-based fading, avoiding the area around the aircraft
-            for (let i = 0; i < screenTrail.length - 1; i++) {
+            for (let i = 0; i < screenTrail.length - 1; i += step) {
                 const p1 = screenTrail[i];
-                const p2 = screenTrail[i + 1];
+                const p2 = screenTrail[Math.min(i + step, screenTrail.length - 1)];
                 
-                if (!p1 || !p2) continue;
+                if (!p1 || !p2 || p1 === p2) continue;
                 
                 // Calculate distance from current aircraft position
                 const dist1 = Math.hypot(p1.x - currentX, p1.y - currentY);
@@ -1510,11 +1757,25 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Draws one aircraft symbol: a square for ground traffic, a
+         * heading-oriented triangle when airborne, plus the speed vector when that
+         * layer is enabled.
+         * @param {Object} ac Displayed aircraft entry.
+         * @param {number} canvasWidth Canvas width in pixels.
+         * @param {string} color Category colour from the active scope theme.
+         * @returns {void}
+         */
         drawAircraftSymbol(ac, canvasWidth, color) {
             const ctx = elements.ctx;
             const { x, y } = ac.displayPos;
             
             const triangleColor = this.getHighContrastColor(color);
+
+            if (canvasRenderer) {
+                const reach = CONFIG.AIRCRAFT_SYMBOL_SIZE + CONFIG.HEADING_LINE_LENGTH + 4;
+                canvasRenderer.markDirty(x - reach, y - reach, reach * 2, reach * 2);
+            }
             
             ctx.globalAlpha = ac.alpha;
             ctx.lineWidth = 2.5;
@@ -1532,6 +1793,7 @@ if (window.tailwind) {
                 ctx.fillStyle = ctx.strokeStyle = triangleColor;
                 const heading = ac.data.track || ac.displayHeading || 0;
                 this.drawHeadingTriangle(ctx, x, y, heading, CONFIG.AIRCRAFT_SYMBOL_SIZE);
+                this.drawHeadingLine(ctx, x, y, heading);
             }
             
             // Draw speed vector if enabled (using original trail color)
@@ -1541,7 +1803,40 @@ if (window.tailwind) {
             }
         },
 
-        // New method to create higher contrast version of a color
+        /**
+         * Draws the short stub ahead of the nose showing where the aircraft is
+         * pointing, {@link CONFIG.HEADING_LINE_LENGTH} pixels long.
+         *
+         * Unlike the speed vector this is a fixed length: it conveys attitude,
+         * not distance covered, and stays readable at any range.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @param {number} x Symbol centre X.
+         * @param {number} y Symbol centre Y.
+         * @param {number} headingDegrees Heading in degrees true.
+         * @returns {void}
+         */
+        drawHeadingLine(ctx, x, y, headingDegrees) {
+            const length = CONFIG.HEADING_LINE_LENGTH;
+            if (!(length > 0)) return;
+
+            // Compass degrees to canvas radians: north is up, so rotate by -90.
+            const rad = MathUtils.toRad(headingDegrees - 90);
+            const start = CONFIG.AIRCRAFT_SYMBOL_SIZE + 1;
+
+            ctx.beginPath();
+            ctx.lineWidth = 1;
+            ctx.moveTo(x + start * Math.cos(rad), y + start * Math.sin(rad));
+            ctx.lineTo(x + (start + length) * Math.cos(rad), y + (start + length) * Math.sin(rad));
+            ctx.stroke();
+        },
+
+        /**
+         * Brightens a colour by +60 per RGB channel so aircraft symbols stay
+         * legible against the trail drawn in the same base colour. Accepts `#rrggbb`
+         * or `rgb(r, g, b)`; anything else is returned untouched.
+         * @param {string} color Source colour.
+         * @returns {string} An `rgb(...)` string, or the input if unparseable.
+         */
         getHighContrastColor(color) {
             // Parse the color string to extract RGB values
             if (color.startsWith('#')) {
@@ -1778,19 +2073,33 @@ if (window.tailwind) {
                 ctx.fillText(lines[0], textX, currentY);
         
                 ctx.font = '10px monospace';
-                currentY += otherLineHeight + lineSpacing;
-                ctx.fillText(lines[1], textX, currentY);
-        
-                currentY += otherLineHeight + lineSpacing;
-                ctx.fillText(lines[2], textX, currentY);
+                for (let i = 1; i < lines.length; i++) {
+                    currentY += otherLineHeight + lineSpacing;
+                    ctx.fillText(lines[i], textX, currentY);
+                }
         
                 drawnLabels.push(placedLabel);
+                if (canvasRenderer) {
+                    // Union of the text block and the leader line back to the target.
+                    const lx = Math.min(placedLabel.x, aircraftX);
+                    const ly = Math.min(placedLabel.y, aircraftY);
+                    const lw = Math.max(placedLabel.x + placedLabel.width, aircraftX) - lx;
+                    const lh = Math.max(placedLabel.y + placedLabel.height, aircraftY) - ly;
+                    canvasRenderer.markDirty(lx, ly, lw, lh);
+                }
             }
         },
 
-        // DEBUG
+        /**
+         * Draws the debug overlay (FPS, JS heap usage where the browser exposes
+         * it, tracked aircraft count). Toggled with the `D` key.
+         * @param {CanvasRenderingContext2D} ctx Target context.
+         * @returns {void}
+         */
         drawDebugInfo(ctx) {
             if (!state.showDebugInfo) return;
+
+            if (canvasRenderer) canvasRenderer.markDirty(5, 5, 180, 60);
 
             ctx.save();
             ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
@@ -2378,10 +2687,30 @@ if (window.tailwind) {
             return false;
         },
         
-        // Performance Optimization #2: Store only geographic coordinates for trails
+        /**
+         * Creates or refreshes the display entry for one aircraft and appends a
+         * point to its geographic trail.
+         *
+         * Trails are stored as lat/lon only — never screen pixels — so zooming or
+         * resizing does not distort history; screen coordinates are derived per
+         * frame by {@link MathUtils.geoTrailToScreen}. Trail points come from
+         * `trailPointPool` and are returned to it when they age out. Aircraft that
+         * fall outside the current range are dropped entirely.
+         * @param {string} hex Uppercased ICAO hex address.
+         * @param {AircraftMessage} ac_latest Newest message for this aircraft.
+         * @param {number} currentTime Current time in seconds.
+         * @param {number} currentBrng True bearing from home, in degrees.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         updateAircraftDisplay(hex, ac_latest, currentTime, currentBrng, cx, cy, radius) {
+            const previous = state.displayedAircraft[hex];
+            const smoothed = this.smoothPosition(previous, ac_latest);
+
             const screenPos = MathUtils.latLonToScreen(
-                ac_latest.lat, ac_latest.lon,
+                smoothed.lat, smoothed.lon,
                 state.maxRangeNm, cx, cy, radius
             );
             
@@ -2412,10 +2741,14 @@ if (window.tailwind) {
             entry.data = ac_latest;
             entry.dist = screenPos.dist;
             
-            // Store geographic trail points using object pool
+            entry.smoothLat = smoothed.lat;
+            entry.smoothLon = smoothed.lon;
+
+            // The trail records the smoothed track, so the symbol always sits on
+            // the head of its own trail rather than beside it.
             const geoPoint = trailPointPool.acquire();
-            geoPoint.lat = ac_latest.lat;
-            geoPoint.lon = ac_latest.lon;
+            geoPoint.lat = smoothed.lat;
+            geoPoint.lon = smoothed.lon;
             geoPoint.timestamp = Date.now();
             
             entry.geoTrail.push(geoPoint);
@@ -2425,11 +2758,69 @@ if (window.tailwind) {
                 const oldPoint = entry.geoTrail.shift();
                 trailPointPool.release(oldPoint);
             }
-        }
+        },
+
+        /**
+         * Applies exponential smoothing between the last displayed position and
+         * the newly reported one.
+         *
+         * ADS-B positions arrive quantised and occasionally jitter by a few
+         * hundred metres, which on a 5 nm scope is a visible twitch.
+         * {@link CONFIG.SMOOTHING_FACTOR} is the weight kept from the previous
+         * position: `0` snaps straight to each report, `0.3` (the default) damps
+         * the jitter while still tracking, and values near `1` lag badly.
+         *
+         * A jump larger than {@link AircraftStateManager.SMOOTHING_SNAP_NM} is
+         * treated as a genuine repositioning and snaps, so an aircraft
+         * re-acquired after a gap does not glide across the scope.
+         * @param {?Object} previous Existing display entry, if any.
+         * @param {AircraftMessage} ac_latest Newly reported message.
+         * @returns {{lat: number, lon: number}} Position to display.
+         */
+        smoothPosition(previous, ac_latest) {
+            const f = CONFIG.SMOOTHING_FACTOR;
+
+            if (!previous || typeof previous.smoothLat !== 'number' ||
+                !(f > 0) || f >= 1) {
+                return { lat: ac_latest.lat, lon: ac_latest.lon };
+            }
+
+            const jump = MathUtils.haversineDistance(
+                previous.smoothLat, previous.smoothLon, ac_latest.lat, ac_latest.lon
+            );
+            if (jump > AircraftStateManager.SMOOTHING_SNAP_NM) {
+                return { lat: ac_latest.lat, lon: ac_latest.lon };
+            }
+
+            return {
+                lat: previous.smoothLat * f + ac_latest.lat * (1 - f),
+                lon: previous.smoothLon * f + ac_latest.lon * (1 - f)
+            };
+        },
+
+        /**
+         * Distance beyond which a new report is a reposition rather than jitter,
+         * in nautical miles.
+         * @type {number}
+         */
+        SMOOTHING_SNAP_NM: 2
     };
 
-    // Enhanced Event Handlers with delegation and debouncing
+    /**
+     * All user interaction: toolbar toggles, keyboard shortcuts, canvas
+     * hit-testing, the settings modal and persistence of UI state.
+     *
+     * Every listener is registered through
+     * {@link EventHandlers.addEventListenerWithCleanup} so it can be torn down
+     * deterministically on unload.
+     * @namespace EventHandlers
+     */
     const EventHandlers = {
+        /**
+         * Removes every tracked listener, interval and timeout. Called on page
+         * unload via {@link App.cleanup}.
+         * @returns {void}
+         */
         cleanup() {
             state.eventListeners.forEach(({ element, event, handler }) => {
                 element.removeEventListener(event, handler);
