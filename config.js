@@ -1,0 +1,441 @@
+// ADSB Radarscope
+// Author: dustsignal
+// Version: 0.0.2
+// GitHub: https://github.com/dustsignal/adsb-scope
+// Speical thanks to: wire99 & Josh M.
+
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+
+/**
+ * @file User-configurable settings and constants for ADSB Radarscope.
+ *
+ * Loaded before `app.js`, which reads these as globals. `DEFAULT_HOME_LAT`,
+ * `DEFAULT_HOME_LON` and `DEFAULT_TAR1090_URL` must be set before the scope
+ * will show anything; the rest have working defaults.
+ *
+ * Values under `DEFAULT_*` and the display/trail settings are only the
+ * initial state — once the user saves the settings panel, localStorage wins
+ * on subsequent loads. The `PERFORMANCE`, range-limit and timing constants
+ * have no UI and are read from here on every run.
+ *
+ * @see {@link https://github.com/dustsignal/adsb-scope}
+ * @license GPL-3.0-or-later
+ */
+
+/**
+ * Global application configuration.
+ * @namespace CONFIG
+ */
+const CONFIG = {
+    /** Version string, shown in the title bar and the version link. @type {string} */
+    VERSION: '0.0.2',
+    
+    // ---- Home Position -------------------------------------------------
+    /** Latitude of the scope centre, decimal degrees. **Set this.** @type {number} */
+    DEFAULT_HOME_LAT: 0.0,
+    /** Longitude of the scope centre, decimal degrees. **Set this.** @type {number} */
+    DEFAULT_HOME_LON: -0.0,
+    /** Range of the outer ring at startup, nautical miles. @type {number} */
+    DEFAULT_RANGE_NM: 50,
+    
+    // ---- Data Sources --------------------------------------------------
+    /**
+     * URL of the aircraft feed. Any tar1090 / dump1090 / PiAware
+     * `aircraft.json` endpoint works. **Set this.**
+     *
+     * Cross-origin hosts must send `Access-Control-Allow-Origin`.
+     * More sources can be added at runtime from the settings panel.
+     * @type {string}
+     */
+    DEFAULT_TAR1090_URL: '[your-ip-path]/aircraft.json',
+    /**
+     * Locations of the OurAirports reference CSVs. Relative paths resolve
+     * against the page, so `data/airports.csv` works for a local copy.
+     * @type {{AIRPORTS: string, NAVAIDS: string, RUNWAYS: string}}
+     */
+    DATA_PATHS: {
+        AIRPORTS: '[your-ip-path]/data/airports.csv',
+        NAVAIDS: '[your-ip-path]/data/navaids.csv',
+        RUNWAYS: '[your-ip-path]/data/runways.csv'
+    },
+    /** How often each enabled source is polled, ms. @type {number} */
+    FETCH_INTERVAL_MS: 1000,
+    /** Per-request abort timeout, ms. @type {number} */
+    FETCH_TIMEOUT_MS: 5000,
+    /** Attempts before a source is reported as failed. @type {number} */
+    MAX_RETRY_ATTEMPTS: 3,
+    /** First retry delay, ms; doubles on each further attempt. @type {number} */
+    INITIAL_RETRY_DELAY_MS: 1000,
+    
+    // ---- Moving receiver (POSITION file) -------------------------------
+    /**
+     * Tracks the home position from a file on disk, for a receiver that moves:
+     * a ship, a vehicle, an aircraft.
+     *
+     * The browser cannot watch a file, so the file is polled over HTTP with
+     * conditional requests — served from the same directory as the page, a
+     * rewritten `POSITION` costs one 304 per poll until it actually changes.
+     * Point whatever produces your fix (a GPS daemon, `gpspipe`, an NMEA
+     * multiplexer) at that file.
+     *
+     * Everything the scope stores is geographic, so trails, airports, navaids
+     * and runways all re-project correctly as the receiver moves.
+     * @namespace CONFIG.POSITION_FILE
+     */
+    POSITION_FILE: {
+        /** Master switch. When off, the home position comes from
+         * `DEFAULT_HOME_LAT`/`LON` or the settings panel. @type {boolean} */
+        ENABLED: false,
+        /** Path to the file, relative to the page or absolute. @type {string} */
+        PATH: 'POSITION',
+        /** How often the file is polled, ms. @type {number} */
+        POLL_INTERVAL_MS: 2000,
+        /**
+         * How far the receiver must move before the scope is re-projected, in
+         * nautical miles. The default of 0.005 nm (~9 m) is below GPS noise, so
+         * a moored vessel does not rebuild the static layer on every jitter.
+         * @type {number}
+         */
+        MIN_MOVE_NM: 0.005,
+        /** Draw the own-ship marker at the scope centre. @type {boolean} */
+        SHOW_OWN_SHIP: true,
+        /** Age at which a fix is reported as stale in the status bar, ms.
+         * @type {number} */
+        STALE_AFTER_MS: 30000
+    },
+    
+    // ---- Performance ---------------------------------------------------
+    /**
+     * Seconds for one full revolution of the sweep. Targets are repainted
+     * only as the sweep passes over them, so this also sets how long a
+     * position may be stale on screen.
+     *
+     * `0.0` makes every fetch appear immediately, which loses the radar
+     * behaviour and is not recommended.
+     * @type {number}
+     */
+    SWEEP_DURATION_S: 3.8,
+    /**
+     * An aircraft is dropped after `SWEEP_DURATION_S × this` seconds without
+     * an update.
+     * @type {number}
+     */
+    AIRCRAFT_TIMEOUT_FACTOR: 3,
+    /** Refresh period for the side panels, ms — deliberately slower than the
+     * canvas, since tables are expensive to rebuild. @type {number} */
+    UI_UPDATE_INTERVAL_MS: 700,
+    /** Minimum gap between rendered frames, ms. 16 ≈ 60 fps; raise to 32
+     * (≈30 fps) on weaker hardware. @type {number} */
+    CANVAS_RENDER_THROTTLE_MS: 16,
+    /** Period of the trail/aircraft reclamation pass, ms. @type {number} */
+    MEMORY_CLEANUP_INTERVAL_MS: 30000,
+    
+    // ---- Trails --------------------------------------------------------
+    /** Maximum stored positions per aircraft trail. @type {number} */
+    MAX_TRAIL_LENGTH: 100,
+    /** Age at which a trail segment fades out completely, minutes. @type {number} */
+    TRAIL_FADE_TIME_MINUTES: 5,
+    /** Segment count for gradient trails. @type {number} */
+    TRAIL_GRADIENT_SEGMENTS: 40,
+    /** Position smoothing weight, 0–1. @type {number} */
+    SMOOTHING_FACTOR: 0.3,
+    
+    // ---- Display -------------------------------------------------------
+    /** Margin between the outer ring and the canvas edge, px. Leaves room
+     * for the compass labels. @type {number} */
+    CANVAS_PADDING: 40,
+    /** Half-height of an aircraft symbol, px. @type {number} */
+    AIRCRAFT_SYMBOL_SIZE: 3,
+    /** Length of the heading line, px. @type {number} */
+    HEADING_LINE_LENGTH: 10,
+    /** How far ahead speed vectors project, minutes. @type {number} */
+    VECTOR_MINUTES: 2,
+    /** Click tolerance when selecting an aircraft, px. @type {number} */
+    CLICK_RADIUS_PX: 15,
+    
+    // ---- Range limits --------------------------------------------------
+    /** Closest selectable range, nautical miles. @type {number} */
+    MIN_RANGE_NM: 5,
+    /** Widest selectable range, nautical miles. @type {number} */
+    MAX_RANGE_NM: 500,
+    /** Range change per zoom step, nautical miles. @type {number} */
+    RANGE_STEP_NM: 5,
+    
+    // ---- UI ------------------------------------------------------------
+    /** Minimum width of the resizable side panel, px. @type {number} */
+    MIN_PANEL_WIDTH: 250,
+    /** How long an emergency banner stays up, ms. @type {number} */
+    ALERT_DURATION_MS: 6000,
+    
+    // ---- Emergency -----------------------------------------------------
+    /**
+     * Squawk codes that trigger a visual and audible alert:
+     * 7500 unlawful interference, 7600 radio failure, 7700 general emergency.
+     * @type {Array<string>}
+     */
+    EMERGENCY_SQUAWKS: ['7500', '7600', '7700'],
+    
+    // ---- Airport / navaid layer ----------------------------------------
+    /**
+     * Rendering parameters for the static geographic layer.
+     * @namespace CONFIG.AIRPORT_DISPLAY
+     * @property {number} SYMBOL_SIZE Airport circle radius, px.
+     * @property {number} NAVAID_SYMBOL_SIZE Navaid symbol radius, px.
+     * @property {number} LABEL_FONT_SIZE Airport label size, px.
+     * @property {number} RUNWAY_LINE_WIDTH Runway stroke width, px.
+     * @property {number} MAX_AIRPORTS_DISPLAY Cap on airports (and navaids)
+     *   drawn at once, so a dense area cannot flood the scope.
+     * @property {number} MIN_RUNWAY_LENGTH_FT Runways shorter than this are
+     *   never loaded, which keeps grass strips off the display.
+     */
+    AIRPORT_DISPLAY: {
+        SYMBOL_SIZE: 6,
+        NAVAID_SYMBOL_SIZE: 4,
+        LABEL_FONT_SIZE: 10,
+        RUNWAY_LINE_WIDTH: 2,
+        MAX_AIRPORTS_DISPLAY: 50,
+        MIN_RUNWAY_LENGTH_FT: 3000
+    },
+    
+    // ---- Performance tuning --------------------------------------------
+    /**
+     * Optimisation switches. All default to on; turn one off to isolate a
+     * rendering or memory problem.
+     * @namespace CONFIG.PERFORMANCE
+     */
+    PERFORMANCE: {
+        // Canvas optimization
+        /** Render through an OffscreenCanvas where supported. @type {boolean} */
+        USE_OFFSCREEN_CANVAS: true,
+        /** Cache rings, compass rose, airports and runways as a bitmap
+         * instead of redrawing them each frame. @type {boolean} */
+        CACHE_STATIC_ELEMENTS: true,
+        /** Track dirty rectangles for partial repaints. @type {boolean} */
+        DIRTY_REGION_TRACKING: true,
+        /** Upper bound on aircraft processed per frame. @type {number} */
+        MAX_PARTICLES_PER_FRAME: 1000,
+        
+        // Memory management
+        /** Objects pre-allocated in the trail-point pool. @type {number} */
+        OBJECT_POOL_SIZE: 100,
+        /** Use weak references for aircraft metadata. @type {boolean} */
+        WEAK_REFERENCE_CLEANUP: true,
+        /** Request a GC pass after trail cleanup, where exposed. @type {boolean} */
+        AGGRESSIVE_TRAIL_CLEANUP: true,
+        
+        // Network optimization
+        /** Share one in-flight promise per URL instead of issuing duplicate
+         * requests each tick. @type {boolean} */
+        REQUEST_POOLING: true,
+        /** Queue requests behind NetworkRequestPool's concurrency limit
+         * instead of firing every feed and CSV at once. @type {boolean} */
+        BATCH_NETWORK_REQUESTS: true,
+        
+        // DOM optimization
+        /** Coalesce panel repaints into one animation frame. @type {boolean} */
+        BATCH_DOM_UPDATES: true,
+        /** Build table rows in a DocumentFragment. @type {boolean} */
+        USE_DOCUMENT_FRAGMENT: true,
+        /** Debounce window resize handling, ms. @type {number} */
+        DEBOUNCE_RESIZE_MS: 100,
+        
+        // State management
+        /** Deep-clone objects on assignment into state. @type {boolean} */
+        IMMUTABLE_STATE_UPDATES: true,
+        /** Route state writes through a change-detecting Proxy. @type {boolean} */
+        PROXY_STATE_DETECTION: true,
+        /** Debounce localStorage writes, ms. @type {number} */
+        LOCALSTORAGE_DEBOUNCE_MS: 500
+    }
+};
+
+/**
+ * Available interface themes, listed in the UI-theme dropdown.
+ *
+ * Each `key` matches a `[data-ui-theme="..."]` block in `styles.css` that
+ * defines the CSS custom properties; `group` is the dropdown heading.
+ * @type {Array<{key: string, name: string, group: ('Dark'|'Light')}>}
+ */
+const UI_THEMES = [
+    { key: 'default-dark', name: 'Default Dark', group: 'Dark' },
+    { key: 'slate', name: 'Slate', group: 'Dark' },
+    { key: 'abyss', name: 'Abyss', group: 'Dark' },
+    { key: 'forest', name: 'Forest', group: 'Dark' },
+    { key: 'crimson', name: 'Crimson', group: 'Dark' },
+    { key: 'royal', name: 'Royal', group: 'Dark' },
+    { key: 'mocha', name: 'Mocha', group: 'Dark' },
+    { key: 'rose-pine', name: 'Rose Pine', group: 'Dark' },
+    { key: 'classic-crt-ui', name: 'Classic CRT', group: 'Dark' },
+    { key: 'amber-crt-ui', name: 'Amber CRT', group: 'Dark' },
+    { key: 'arctic-blue-ui', name: 'Arctic Blue', group: 'Dark' },
+    { key: 'night-vision-ui', name: 'Night Vision', group: 'Dark' },
+    { key: 'stealth-gray-ui', name: 'Stealth Gray', group: 'Dark' },
+    { key: 'crimson-alert-ui', name: 'Crimson Alert', group: 'Dark' },
+    { key: 'cyberpunk-ui', name: 'Cyberpunk', group: 'Dark' },
+    { key: 'deep-ocean-ui', name: 'Deep Ocean', group: 'Dark' },
+    { key: 'blueprint-ui', name: 'Blueprint', group: 'Dark' },
+    { key: 'hacker-matrix-ui', name: 'Hacker Matrix', group: 'Dark' },
+    { key: 'solar-flare-ui', name: 'Solar Flare', group: 'Dark' },
+    { key: 'nebula-purple-ui', name: 'Nebula Purple', group: 'Dark' },
+    { key: 'vintage-sepia-ui', name: 'Vintage Sepia', group: 'Dark' },
+    { key: 'lava-flow-ui', name: 'Lava Flow', group: 'Dark' },
+    { key: 'starfield-ui', name: 'Starfield', group: 'Dark' },
+    { key: 'aurora-ui', name: 'Aurora', group: 'Dark' },
+    { key: 'copper-rust-ui', name: 'Copper Rust', group: 'Dark' },
+    { key: 'default-light', name: 'Default Light', group: 'Light' },
+    { key: 'stone', name: 'Stone', group: 'Light' },
+    { key: 'mint', name: 'Mint', group: 'Light' },
+    { key: 'sky', name: 'Sky', group: 'Light' },
+    { key: 'lavender', name: 'Lavender', group: 'Light' },
+    { key: 'paper', name: 'Paper', group: 'Light' },
+    { key: 'azure', name: 'Azure', group: 'Light' },
+    { key: 'daylight-ui', name: 'Daylight', group: 'Light' },
+    { key: 'paper-map-ui', name: 'Paper Map', group: 'Light' },
+    { key: 'sandstorm-ui', name: 'Sandstorm', group: 'Light' }
+];
+
+/**
+ * Available radar-scope palettes, in dropdown order.
+ *
+ * The array index is the stored `scopeThemeIndex`, so entries should be
+ * appended rather than reordered; every `key` must have a matching entry
+ * in {@link SCOPE_THEME_COLORS}.
+ * @type {Array<{name: string, key: string}>}
+ */
+const SCOPE_THEMES = [
+    { name: 'Classic Green CRT', key: 'classic-green' },
+    { name: 'Amber CRT', key: 'amber-crt' },
+    { name: 'Arctic Blue', key: 'arctic-blue' },
+    { name: 'Desert Amber', key: 'desert-amber' },
+    { name: 'Night Vision', key: 'night-vision' },
+    { name: 'Stealth Gray', key: 'stealth-gray' },
+    { name: 'Crimson Alert', key: 'crimson-alert' },
+    { name: 'Cyberpunk', key: 'cyberpunk' },
+    { name: 'Solar Flare', key: 'solar-flare' },
+    { name: 'Deep Ocean', key: 'deep-ocean' },
+    { name: 'Forest Camo', key: 'forest-camo' },
+    { name: 'Volcanic Ash', key: 'volcanic-ash' },
+    { name: 'Nebula Purple', key: 'nebula-purple' },
+    { name: 'Ghost White', key: 'ghost-white' },
+    { name: 'Golden Age', key: 'golden-age' },
+    { name: 'Retro Vga', key: 'retro-vga' },
+    { name: 'Toxic Sludge', key: 'toxic-sludge' },
+    { name: 'Strawberry Cream', key: 'strawberry-cream' },
+    { name: 'Blueprint', key: 'blueprint' },
+    { name: 'Hacker Matrix', key: 'hacker-matrix' },
+    { name: 'Autumn Leaves', key: 'autumn-leaves' },
+    { name: 'Coral Reef', key: 'coral-reef' },
+    { name: 'Lunar Rock', key: 'lunar-rock' },
+    { name: 'Sandstone', key: 'sandstone' },
+    { name: 'Royal Velvet', key: 'royal-velvet' },
+    { name: 'Mint Chocolate', key: 'mint-chocolate' },
+    { name: 'Infrared Heat', key: 'infrared-heat' },
+    { name: 'Plasma Burn', key: 'plasma-burn' },
+    { name: 'Cold Steel', key: 'cold-steel' },
+    { name: 'Digital Rain', key: 'digital-rain' },
+    { name: 'Copper Rust', key: 'copper-rust' },
+    { name: 'Aurora Borealis', key: 'aurora-borealis' },
+    { name: 'Vintage Sepia', key: 'vintage-sepia' },
+    { name: 'Acid Wash', key: 'acid-wash' },
+    { name: 'Moonlit', key: 'moonlit' },
+    { name: 'Lava Flow', key: 'lava-flow' },
+    { name: 'Emerald City', key: 'emerald-city' },
+    { name: 'Grape Soda', key: 'grape-soda' },
+    { name: 'Starfield', key: 'starfield' },
+    { name: 'Jungle', key: 'jungle' },
+    { name: 'Biohazard', key: 'biohazard' },
+    { name: 'Daylight', key: 'daylight' },
+    { name: 'Cad', key: 'cad' },
+    { name: 'Blueprint Light', key: 'blueprint-light' },
+    { name: 'Paper Map', key: 'paper-map' },
+    { name: 'Arctic Light', key: 'arctic-light' },
+    { name: 'Sandstorm', key: 'sandstorm' },
+    { name: 'Medical', key: 'medical' },
+    { name: 'Clean Room', key: 'clean-room' },
+    { name: 'Graph Paper', key: 'graph-paper' },
+    { name: 'Hi Vis', key: 'hi-vis' }
+];
+
+/**
+ * Colour roles for each scope theme, keyed by the theme's `key`.
+ *
+ * - `background` scope face
+ * - `grid`       range rings, crosshairs and compass ticks
+ * - `sweep`      rotating sweep line
+ * - `aircraft`   default target colour
+ * - `selected`   the target selected in the list or on the scope
+ * - `emergency`  targets squawking 7500/7600/7700
+ * - `ground`     traffic reporting on-ground
+ * - `text`       range labels, compass labels and data blocks
+ * - `mlat`       multilaterated targets
+ * - `adsb`       ADS-B targets
+ * - `other`      targets of unknown provenance
+ *
+ * A missing role renders as magenta `#FF00FF` — see
+ * {@link ThemeManager.getScopeThemeColor} — so gaps are visible at a glance.
+ * @type {Object<string, Object<string, string>>}
+ */
+const SCOPE_THEME_COLORS = {
+    'classic-green': { background: '#001200', grid: '#003300', sweep: '#00FF00', aircraft: '#00FF00', selected: '#CCFFCC', emergency: '#FF6666', ground: '#00B300', text: '#C8FFC8', mlat: '#FFFF00', adsb: '#00FF00', other: '#00AAAA' },
+    'amber-crt': {background: '#1A0F00', grid: '#FFB000', sweep: '#FFB00040', aircraft: '#FFB300', selected: '#FFFFFF', emergency: '#FF0000', ground: '#D9534F', text: '#FFB000', mlat: '#FFFF00', adsb: '#FFC763', other: '#FF8000'},
+    'arctic-blue': { background: '#050A14', grid: '#14294F', sweep: '#63C7FF', aircraft: '#00FFFF', selected: '#FFFF00', emergency: '#FF3333', ground: '#63C7FF', text: '#DCF0FF', mlat: '#FFD700', adsb: '#00FFFF', other: '#90EE90' },
+    'desert-amber': { background: '#140A00', grid: '#4F3314', sweep: '#FFB300', aircraft: '#FFC763', selected: '#FFFFDB', emergency: '#FF3D3D', ground: '#FFB300', text: '#FFDCB4', mlat: '#FF69B4', adsb: '#FFC763', other: '#87CEEB' },
+    'night-vision': { background: '#000000', grid: '#003D00', sweep: '#00FF00', aircraft: '#00FF00', selected: '#CCFFCC', emergency: '#FF0000', ground: '#00B300', text: '#00FF00', mlat: '#ADFF2F', adsb: '#00FF00', other: '#32CD32' },
+    'stealth-gray': { background: '#14141A', grid: '#3D3D45', sweep: '#B3B3C7', aircraft: '#DBDBF0', selected: '#FFFF66', emergency: '#FF4F4F', ground: '#B3B3C7', text: '#DCDCF0', mlat: '#FFE4B5', adsb: '#DBDBF0', other: '#DDA0DD' },
+    'crimson-alert': { background: '#1A0000', grid: '#4F0000', sweep: '#FF3333', aircraft: '#FF9999', selected: '#FFFFCC', emergency: '#FFFF00', ground: '#FF3333', text: '#FFC8C8', mlat: '#FFA500', adsb: '#FF9999', other: '#FF69B4' },
+    'cyberpunk': { background: '#0A0014', grid: '#4F144F', sweep: '#FF00FF', aircraft: '#00FFFF', selected: '#FFFF00', emergency: '#FF1494', ground: '#FF00FF', text: '#DCDCFE', mlat: '#00FF00', adsb: '#00FFFF', other: '#FF00FF' },
+    'solar-flare': { background: '#1a0d00', grid: '#4d2a00', sweep: '#ffdd00', aircraft: '#ffaa00', selected: '#ffffff', emergency: '#ff4400', ground: '#ffdd00', text: '#ffecb3', mlat: '#ff6600', adsb: '#ffaa00', other: '#ff8800' },
+    'deep-ocean': { background: '#00051a', grid: '#001a4d', sweep: '#00aaff', aircraft: '#66ccff', selected: '#f0f8ff', emergency: '#ff3333', ground: '#00aaff', text: '#cceeff', mlat: '#00ffff', adsb: '#66ccff', other: '#0088ff' },
+    'forest-camo': { background: '#0a1a0a', grid: '#1f4d1f', sweep: '#66ff66', aircraft: '#aaffaa', selected: '#ffffcc', emergency: '#ff6600', ground: '#66ff66', text: '#d9ffd9', mlat: '#ccffcc', adsb: '#aaffaa', other: '#88ff88' },
+    'volcanic-ash': { background: '#101010', grid: '#333333', sweep: '#ff4d4d', aircraft: '#ff8080', selected: '#ffff00', emergency: '#ff0000', ground: '#ff4d4d', text: '#cccccc', mlat: '#ffaaaa', adsb: '#ff8080', other: '#ff6666' },
+    'nebula-purple': { background: '#10001a', grid: '#3d004d', sweep: '#ff00ff', aircraft: '#ff99ff', selected: '#ccffff', emergency: '#ff3333', ground: '#ff00ff', text: '#f2ccff', mlat: '#ff66ff', adsb: '#ff99ff', other: '#ffccff' },
+    'ghost-white': { background: '#1a1a1a', grid: '#4d4d4d', sweep: '#ffffff', aircraft: '#cccccc', selected: '#00ff00', emergency: '#ff0000', ground: '#ffffff', text: '#e6e6e6', mlat: '#aaaaaa', adsb: '#cccccc', other: '#888888' },
+    'golden-age': { background: '#1a1400', grid: '#4d4200', sweep: '#ffd700', aircraft: '#ffec80', selected: '#ffffff', emergency: '#ff4500', ground: '#ffd700', text: '#fff5cc', mlat: '#ffcc00', adsb: '#ffec80', other: '#ffdd55' },
+    'retro-vga': { background: '#0000a0', grid: '#0000c0', sweep: '#ffffff', aircraft: '#00ff00', selected: '#ffff00', emergency: '#ff0000', ground: '#00ff00', text: '#c0c0c0', mlat: '#00ffff', adsb: '#00ff00', other: '#ff00ff' },
+    'toxic-sludge': { background: '#1a1a00', grid: '#4d4d00', sweep: '#adff2f', aircraft: '#d2ff80', selected: '#ffffff', emergency: '#ff0000', ground: '#adff2f', text: '#eaffcc', mlat: '#ccff00', adsb: '#d2ff80', other: '#bbff55' },
+    'strawberry-cream': { background: '#2a0d0d', grid: '#6a2a2a', sweep: '#ffb6c1', aircraft: '#ffdde1', selected: '#ffffff', emergency: '#ff0000', ground: '#ffb6c1', text: '#ffe6e8', mlat: '#ffccdd', adsb: '#ffdde1', other: '#ffaacc' },
+    'blueprint': { background: '#00002a', grid: '#00006a', sweep: '#ffffff', aircraft: '#87cefa', selected: '#ffff00', emergency: '#ff4500', ground: '#ffffff', text: '#d0e0ff', mlat: '#aaccff', adsb: '#87cefa', other: '#6699ff' },
+    'hacker-matrix': { background: '#000000', grid: '#002200', sweep: '#00ff00', aircraft: '#66ff66', selected: '#ffffff', emergency: '#ff0000', ground: '#00cc00', text: '#00ff00', mlat: '#88ff88', adsb: '#66ff66', other: '#44ff44' },
+    'autumn-leaves': { background: '#2a0a00', grid: '#6a2a00', sweep: '#ff8c00', aircraft: '#ffd480', selected: '#ffff00', emergency: '#dc143c', ground: '#ff8c00', text: '#ffeacc', mlat: '#ffaa55', adsb: '#ffd480', other: '#ffbb66' },
+    'coral-reef': { background: '#001a1a', grid: '#004d4d', sweep: '#7fffd4', aircraft: '#ff7f50', selected: '#f0ffff', emergency: '#ff1493', ground: '#7fffd4', text: '#ccfff2', mlat: '#ffaa88', adsb: '#ff7f50', other: '#ff9966' },
+    'lunar-rock': { background: '#222222', grid: '#444444', sweep: '#c0c0c0', aircraft: '#dddddd', selected: '#00ff00', emergency: '#ff3333', ground: '#c0c0c0', text: '#e0e0e0', mlat: '#aaaaaa', adsb: '#dddddd', other: '#999999' },
+    'sandstone': { background: '#2a1d0d', grid: '#6a4a2a', sweep: '#f4a460', aircraft: '#ffdead', selected: '#ffffff', emergency: '#ff4500', ground: '#f4a460', text: '#ffefd9', mlat: '#ffcc99', adsb: '#ffdead', other: '#ffddaa' },
+    'royal-velvet': { background: '#1a001a', grid: '#4d004d', sweep: '#8a2be2', aircraft: '#da70d6', selected: '#ffd700', emergency: '#ff0000', ground: '#8a2be2', text: '#efccff', mlat: '#cc66cc', adsb: '#da70d6', other: '#bb55bb' },
+    'mint-chocolate': { background: '#100a0a', grid: '#3d2a2a', sweep: '#98ff98', aircraft: '#d9ffd9', selected: '#ffffff', emergency: '#ff4500', ground: '#98ff98', text: '#e6ffe6', mlat: '#bbffbb', adsb: '#d9ffd9', other: '#aaffaa' },
+    'infrared-heat': { background: '#000000', grid: '#220000', sweep: '#ff0000', aircraft: '#ffff00', selected: '#ffffff', emergency: '#ff0000', ground: '#ff9900', text: '#ffaaaa', mlat: '#ff6600', adsb: '#ffff00', other: '#ffcc00' },
+    'plasma-burn': { background: '#11001a', grid: '#3d004d', sweep: '#ff00ff', aircraft: '#ff66ff', selected: '#00ffff', emergency: '#ffff00', ground: '#ff00ff', text: '#f2ccff', mlat: '#ff99ff', adsb: '#ff66ff', other: '#ff33ff' },
+    'cold-steel': { background: '#0d131a', grid: '#2a3a4d', sweep: '#add8e6', aircraft: '#e0ffff', selected: '#ffffff', emergency: '#ff3333', ground: '#add8e6', text: '#d9ecf2', mlat: '#bbddee', adsb: '#e0ffff', other: '#cceeee' },
+    'digital-rain': { background: '#000510', grid: '#001530', sweep: '#00ffff', aircraft: '#00aaff', selected: '#00ff00', emergency: '#ff0000', ground: '#00dddd', text: '#aaddff', mlat: '#0099ff', adsb: '#00aaff', other: '#0088ff' },
+    'copper-rust': { background: '#2a0a00', grid: '#6a2a00', sweep: '#b87333', aircraft: '#daa520', selected: '#00ffff', emergency: '#ff0000', ground: '#008080', text: '#ffeacc', mlat: '#cc8844', adsb: '#daa520', other: '#bb9933' },
+    'aurora-borealis': { background: '#00001a', grid: '#002030', sweep: '#00ff7f', aircraft: '#ff69b4', selected: '#ffffff', emergency: '#ff0000', ground: '#32cd32', text: '#ccffee', mlat: '#ff88cc', adsb: '#ff69b4', other: '#ff77bb' },
+    'vintage-sepia': { background: '#2a1d0d', grid: '#504030', sweep: '#d2b48c', aircraft: '#f5deb3', selected: '#ffffff', emergency: '#a52a2a', ground: '#d2b48c', text: '#fff0d9', mlat: '#e6ccaa', adsb: '#f5deb3', other: '#ddcc99' },
+    'acid-wash': { background: '#1a001a', grid: '#4d004d', sweep: '#ff00ff', aircraft: '#00ffff', selected: '#ffff00', emergency: '#ff1493', ground: '#ff00ff', text: '#efccff', mlat: '#00ff00', adsb: '#00ffff', other: '#ff00ff' },
+    'moonlit': { background: '#0d0d1a', grid: '#2a2a4d', sweep: '#c0c0c0', aircraft: '#f0f8ff', selected: '#00ff00', emergency: '#ff4500', ground: '#c0c0c0', text: '#e6e6ff', mlat: '#ddddee', adsb: '#f0f8ff', other: '#ccddee' },
+    'lava-flow': { background: '#1a0000', grid: '#4d0000', sweep: '#ff4500', aircraft: '#ff8c00', selected: '#ffff00', emergency: '#ff0000', ground: '#ff4500', text: '#ffcccc', mlat: '#ff6600', adsb: '#ff8c00', other: '#ff7700' },
+    'emerald-city': { background: '#001a0a', grid: '#004d1f', sweep: '#00ff00', aircraft: '#ffd700', selected: '#ffffff', emergency: '#ff0000', ground: '#50c878', text: '#ccffdd', mlat: '#ffee00', adsb: '#ffd700', other: '#ffcc00' },
+    'grape-soda': { background: '#1a0d1a', grid: '#4d2a4d', sweep: '#da70d6', aircraft: '#dda0dd', selected: '#ffffff', emergency: '#ff00ff', ground: '#da70d6', text: '#f2e6f2', mlat: '#cc88cc', adsb: '#dda0dd', other: '#bb77bb' },
+    'starfield': { background: '#03051e', grid: '#1c2152', sweep: '#dadaff', aircraft: '#ffffaa', selected: '#aaffff', emergency: '#ff5555', ground: '#dadaff', text: '#dadaff', mlat: '#ffffcc', adsb: '#ffffaa', other: '#ffff88' },
+    'jungle': { background: '#081405', grid: '#2a4f14', sweep: '#a3ff00', aircraft: '#d4ff63', selected: '#ffffff', emergency: '#ff3d3d', ground: '#a3ff00', text: '#c8ffb4', mlat: '#bbff33', adsb: '#d4ff63', other: '#ccff55' },
+    'biohazard': { background: '#141100', grid: '#4f4414', sweep: '#fff700', aircraft: '#b8ff63', selected: '#ffffff', emergency: '#ff0000', ground: '#fff700', text: '#ffffb4', mlat: '#ccff88', adsb: '#b8ff63', other: '#aaff55' },
+    'daylight': { background: '#dce8f2', grid: '#aabccc', sweep: '#0077ff', aircraft: '#ff3333', selected: '#0000ff', emergency: '#ff0000', ground: '#0099ff', text: '#224466', mlat: '#ff6666', adsb: '#ff3333', other: '#ff4444' },
+    'cad': { background: '#ffffff', grid: '#cccccc', sweep: '#888888', aircraft: '#0000ff', selected: '#ff00ff', emergency: '#ff0000', ground: '#0000ff', text: '#000000', mlat: '#0066ff', adsb: '#0000ff', other: '#0033ff' },
+    'blueprint-light': { background: '#e0e8f6', grid: '#a8bedc', sweep: '#ffffff', aircraft: '#0033cc', selected: '#ff3300', emergency: '#cc0000', ground: '#0033cc', text: '#002266', mlat: '#0066ff', adsb: '#0033cc', other: '#0044dd' },
+    'paper-map': { background: '#f5f3e8', grid: '#dcd9c8', sweep: '#b1a18c', aircraft: '#d9534f', selected: '#0275d8', emergency: '#ff0000', ground: '#b1a18c', text: '#6a5f4b', mlat: '#e66666', adsb: '#d9534f', other: '#cc4444' },
+    'arctic-light': { background: '#f0f8ff', grid: '#c0d8ef', sweep: '#63c7ff', aircraft: '#0088cc', selected: '#0000ff', emergency: '#ff3333', ground: '#63c7ff', text: '#052a4f', mlat: '#0099dd', adsb: '#0088cc', other: '#0077bb' },
+    'sandstorm': { background: '#fdf6e3', grid: '#eee8d5', sweep: '#dc322f', aircraft: '#268bd2', selected: '#d33682', emergency: '#ff0000', ground: '#dc322f', text: '#657b83', mlat: '#2aa198', adsb: '#268bd2', other: '#6c71c4' },
+    'medical': { background: '#ffffff', grid: '#d0d0d0', sweep: '#00a0a0', aircraft: '#d90000', selected: '#0000d9', emergency: '#ff0000', ground: '#00a0a0', text: '#444444', mlat: '#ff3333', adsb: '#d90000', other: '#cc0000' },
+    'clean-room': { background: '#f8f8f8', grid: '#d8d8d8', sweep: '#a0a0a0', aircraft: '#000000', selected: '#0000ff', emergency: '#ff0000', ground: '#888888', text: '#333333', mlat: '#444444', adsb: '#000000', other: '#222222' },
+    'graph-paper': { background: '#ffffff', grid: '#add8e6', sweep: '#4682b4', aircraft: '#ff4500', selected: '#32cd32', emergency: '#ff0000', ground: '#4682b4', text: '#00008b', mlat: '#ff6633', adsb: '#ff4500', other: '#ff5522' },
+    'hi-vis': { background: '#ffffff', grid: '#c0c0c0', sweep: '#ffaa00', aircraft: '#000000', selected: '#ff00ff', emergency: '#ff0000', ground: '#ffaa00', text: '#000000', mlat: '#333333', adsb: '#000000', other: '#111111' }
+};
+
+
+

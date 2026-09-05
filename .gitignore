@@ -1,0 +1,41 @@
+# Repository root.
+#
+# The application is four static files with no dependencies and no build step,
+# so almost nothing here is generated. The test harness is a self-contained
+# sub-project and carries its own rules in test/.gitignore.
+#
+# Paths are anchored with a leading slash so they apply to the root only and
+# do not silently reach into test/.
+
+# Should never exist: the application has no dependencies.
+/node_modules/
+/package-lock.json
+
+# Local configuration override, applied on top of config.js by index.html.
+# Start from config.demo.js. Kept out of commits so an experiment on one
+# machine never becomes everyone's default.
+/config.local.js
+
+# Local receiver position. Copy POSITION to POSITION.local, point
+# POSITION_FILE.PATH at it, and keep your own coordinates out of commits.
+POSITION.local
+
+# Scratch file from the atomic write pattern documented in POSITION and
+# CONFIG_EXAMPLE.md: write POSITION.tmp, then rename over POSITION.
+POSITION.tmp
+
+# A locally served aircraft feed, for looking at the scope without a receiver.
+# A real install points DEFAULT_TAR1090_URL at the receiver instead.
+/data/aircraft.json
+/data/aircraft.json.tmp
+
+# Assets
+assets/
+
+# Editor and OS cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
