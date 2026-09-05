@@ -1,0 +1,258 @@
+ADSB RADARSCOPE - INSTALLATION
+==============================
+
+A browser-based radar display for ADS-B aircraft data. No build step, no
+dependencies, no server-side code - it is four static files served over HTTP.
+
+
+REQUIREMENTS
+------------
+
+  * A modern browser: Chrome/Edge 90+, Firefox 88+, or Safari 14+
+  * An ADS-B receiver serving aircraft.json: tar1090, dump1090, or
+    FlightAware PiAware
+  * Any static HTTP server
+
+The page must be served over HTTP. Opening index.html directly with a file://
+URL will not work - the browser blocks the fetches for the CSV reference data
+and the aircraft feed.
+
+
+1. GET THE FILES
+----------------
+
+  From a release archive:
+
+      unzip adsb-radarscope-v0.0.2.zip
+      cd adsb-radarscope
+
+  Or from GitHub:
+
+      git clone https://github.com/dustsignal/adsb-scope.git
+      cd adsb-scope
+
+
+2. CONFIGURE
+------------
+
+  Open config.js and set three values near the top:
+
+      DEFAULT_HOME_LAT: 40.712776,
+      DEFAULT_HOME_LON: -74.005974,
+      DEFAULT_TAR1090_URL: 'http://192.168.1.100/tar1090/data/aircraft.json',
+
+  DEFAULT_HOME_LAT / DEFAULT_HOME_LON
+      Your receiver's antenna position in decimal degrees - north and east
+      positive, south and west negative. This becomes the centre of the scope.
+
+      If your receiver moves - a ship, a vehicle - leave these as a starting
+      point and see MOVING RECEIVER below instead.
+
+  DEFAULT_TAR1090_URL
+      Your receiver's aircraft.json endpoint. Common forms:
+
+          tar1090, same machine
+              http://localhost/tar1090/data/aircraft.json
+          tar1090, over the network
+              http://192.168.1.100/tar1090/data/aircraft.json
+          PiAware, same machine
+              http://localhost:8080/data/aircraft.json
+          PiAware, over the network
+              http://192.168.1.100:8080/data/aircraft.json
+          dump1090-fa
+              http://192.168.1.100/skyaware/data/aircraft.json
+
+      Replace 192.168.1.100 with your receiver's address. Note that PiAware
+      normally listens on port 8080 and tar1090 on port 80.
+
+  Optionally, check DATA_PATHS. It should point at the CSV files included
+  under data/:
+
+      DATA_PATHS: {
+          AIRPORTS: 'data/airports.csv',
+          NAVAIDS:  'data/navaids.csv',
+          RUNWAYS:  'data/runways.csv'
+      },
+
+  Every other setting has a working default, and most are also editable from
+  the settings panel (press S). See CONFIG_EXAMPLE.md for the full reference.
+
+  NO RECEIVER YET?  Skip the edits above and use the demo configuration:
+
+      cp config.demo.js config.local.js     # applied on top of config.js
+      node tools/demo-feed.js &             # synthetic aircraft feed
+      node tools/ship-sim.js &              # the receiver, under way at 8 kt
+      python3 -m http.server 8000
+
+  That centres the scope in Guanabara Bay, Rio de Janeiro, reading the CSVs
+  shipped in data/. ship-sim.js takes the vessel up and down the main channel
+  at 8 knots with the course changing as it follows the route; run
+  "node tools/ship-sim.js --check" to confirm a 12 h transit never leaves the
+  water. Delete config.local.js to go back to your own settings.
+
+
+3. SERVE THE DIRECTORY
+----------------------
+
+  Pick whichever is already installed:
+
+      Python 3
+          python -m http.server 8000
+
+      Node.js
+          npx http-server -p 8000
+
+      PHP
+          php -S localhost:8000
+
+  Leave it running. All three serve the current directory, so run them from
+  the folder containing index.html.
+
+
+4. OPEN IT
+----------
+
+  Browse to:
+
+      http://localhost:8000
+
+  You should see the radar face with a rotating sweep. Aircraft appear as the
+  sweep passes over them, not all at once - that is intentional.
+
+  The status bar along the bottom of the scope is the fastest way to check
+  the installation:
+
+      CONN: OK                    the feed is answering
+      CONN: Partial (1 failed)    one source is down, the others still work
+      CONN: Error                 no source could be reached
+      DATA: 1234A/567N/890R       airports, navaids and runways loaded
+      POS: 40.71278, -74.00597    the home position in use
+      UNDERWAY: ... 045° 12.4kt   position is coming from a POSITION file
+
+  Press H or ? for the keyboard shortcuts.
+
+
+5. MOVING RECEIVER (OPTIONAL)
+-----------------------------
+
+  If the receiver is aboard a ship or a vehicle, the scope centre can follow a
+  file instead of a fixed coordinate.
+
+  a. Enable it, either in config.js:
+
+         POSITION_FILE: { ENABLED: true, PATH: 'POSITION', ... }
+
+     or in Settings (S) > Moving Receiver, which also sets the poll interval
+     and the movement threshold. While tracking is on, the Home Position
+     fields are read-only - the file wins.
+
+  b. Have your GPS source rewrite that file. Any of these work:
+
+         -23.9608, -46.3336                    bare pair
+         -23.9608 -46.3336 045 12.4            with course and speed
+
+         LAT=-23.9608                          KEY=VALUE
+         LON=-46.3336
+         HEADING=045
+         SPEED=12.4
+
+         {"lat": -23.9608, "lon": -46.3336}    JSON
+
+         $GPRMC,123519,A,2357.648,S,...        NMEA 0183 (GGA or RMC)
+
+     Course is degrees true, speed is knots; both optional. With NMEA the last
+     valid sentence wins, so appending to a log works. Lines starting with #
+     are ignored. The POSITION file shipped with the release documents all of
+     this inline.
+
+  c. Write the file atomically, so the scope never reads it half-written:
+
+         while :; do
+             gpspipe -w -n 5 | grep -m1 RMC > POSITION.tmp \
+                 && mv POSITION.tmp POSITION
+             sleep 1
+         done
+
+  The file is polled with conditional requests, so an unchanged file costs one
+  304 per poll and nothing is redrawn. When it changes, the scope re-projects:
+  aircraft, trails, airports, navaids and runways all move with you.
+
+  Movement below MIN_MOVE_NM (default ~9 m) is ignored, so GPS jitter at anchor
+  does not rebuild the display continuously. If no fix arrives for 30 seconds
+  the status bar shows (STALE) and the own-ship marker dims to the emergency
+  colour.
+
+
+TROUBLESHOOTING
+---------------
+
+  Blank page, nothing renders
+      Open the browser console (F12). A SyntaxError in config.js means a bad
+      value there - most often the 00.0000 placeholder described above.
+
+  Sweep rotates, no aircraft
+      Open your DEFAULT_TAR1090_URL directly in a browser tab. You should see
+      JSON with an "aircraft" array. If not, the receiver is unreachable or
+      the path is wrong.
+
+  "Failed to fetch" or a CORS error in the console
+      The feed is on a different host and does not send
+      Access-Control-Allow-Origin. Serve the page from the same host as the
+      receiver, or configure the receiver's web server to send:
+
+          Access-Control-Allow-Origin: *
+          Access-Control-Allow-Methods: GET
+
+  Aircraft appear, but no airports or runways
+      Check DATA_PATHS and confirm the CSVs exist under data/. Each file
+      loads independently, so a missing one costs only its own layer. Note
+      that airports need a four-character ICAO code to be displayed, and
+      runways shorter than 3000 ft are filtered out by default.
+
+  Changes to config.js seem to be ignored
+      Once you save from the settings panel, the stored values shadow the
+      config.js defaults on every later load. Press "Clear Storage" in the
+      settings panel: it discards all saved settings and reloads from
+      config.js.
+
+  Settings will not persist
+      localStorage is blocked. Check that you are not in a private window and
+      that no privacy extension is blocking site data.
+
+  Poor frame rate
+      In config.js, set CANVAS_RENDER_THROTTLE_MS to 32 and MAX_TRAIL_LENGTH
+      to 25. Turn runways off in the UI - they are the heaviest layer - and
+      prefer a simple scope theme. CONFIG_EXAMPLE.md has tuning recipes.
+
+  No emergency alert sound
+      The AudioContext is created on the first click anywhere in the page,
+      because browsers block audio without a user gesture. Click once, and
+      confirm sound is enabled in the settings panel. The tone plays once per
+      emergency, not once per poll.
+
+  Scope will not follow the POSITION file
+      Check the status line under Settings > Moving Receiver. It reports the
+      parsed position and which format matched, or the read error. Common
+      causes: the file is not served by your web server (it must sit beside
+      index.html, or PATH must point at a URL the page can reach), or the
+      contents do not match any accepted format - open the file's URL in a
+      browser tab to see what the scope is being handed.
+
+  Scope follows the file but jumps around at anchor
+      Raise MIN_MOVE_NM in Settings > Moving Receiver. The default of 0.005 nm
+      (~9 m) suits most GPS units; a noisier one may need 0.02.
+
+
+FURTHER READING
+---------------
+
+  README.md            features, usage, keyboard shortcuts
+  CONFIG_EXAMPLE.md    full configuration reference and tuning recipes
+  ARCHITECTURE.md      how the code is organised, for modifying it
+  KNOWN_ISSUES.md      audit record: what was broken, and how it was fixed
+  POSITION             moving-receiver position file, documented inline
+  config.demo.js       ready-to-run test configuration
+  tools/demo-feed.js   synthetic aircraft feed, for looking at the scope
+  tools/ship-sim.js    receiver position generator, 8 kt through Guanabara Bay
+  test/README.md       test harness - not needed to run the app
+  LICENSE              GNU General Public License v3
