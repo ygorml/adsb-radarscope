@@ -1,6 +1,6 @@
 // ADSB Radarscope
 // Author: dustsignal
-// Version: 0.9.2.0837110925
+// Version: 0.0.2
 // GitHub: https://github.com/dustsignal/adsb-scope
 // Speical thanks to: wire99 & Josh M.
 
@@ -18,7 +18,7 @@
 // This file contains all user-configurable settings and constants
 
 const CONFIG = {
-    VERSION: '0.9.2.0837110925',
+    VERSION: '0.0.2',
     
     // Home Position Settings
     DEFAULT_HOME_LAT: 0.0,

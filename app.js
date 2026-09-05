@@ -1,6 +1,6 @@
 // ADSB Radarscope
 // Author: dustsignal
-// Version: 0.9.2.0837110925
+// Version: 0.0.2
 // GitHub: https://github.com/dustsignal/adsb-scope
 // Speical thanks to: wire99 & Josh M.
 
