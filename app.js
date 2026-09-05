@@ -13,10 +13,136 @@
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
+/**
+ * @file Main application for ADSB Radarscope: a canvas radar display fed by
+ * tar1090 / dump1090 / PiAware aircraft feeds.
+ *
+ * The whole application lives in one IIFE and is organised as a set of
+ * single-instance namespaces:
+ *
+ * - {@link StateManager} / {@link state} — observable application state
+ * - {@link DataManager} — polls the feeds, merges and validates messages
+ * - {@link CSVDataManager} — loads airports, navaids and runways
+ * - {@link PositionManager} — tracks a moving receiver from a POSITION file
+ * - {@link AircraftStateManager} — promotes targets as the sweep passes
+ * - {@link CanvasRenderer} / {@link Renderer} — static and dynamic layers
+ * - {@link UIManager} — panels, tables, popups and alerts
+ * - {@link EventHandlers} — input handling and settings persistence
+ * - {@link ScopeLoop} — the requestAnimationFrame driver
+ * - {@link App} — startup and teardown
+ *
+ * Data flows one way each cycle: fetch → validate → sweep-gated promotion
+ * → render → throttled UI refresh.
+ *
+ * Every position the application stores is geographic, never a screen pixel.
+ * That is what lets the scope centre move: with a POSITION file configured the
+ * receiver can be aboard a ship, and aircraft, trails, airports, navaids and
+ * runways all re-project correctly around the new origin.
+ *
+ * @author dustsignal
+ * @see {@link https://github.com/dustsignal/adsb-scope}
+ * @license GPL-3.0-or-later
+ */
 
-// ADSB Radarscope Main Application
+/**
+ * One aircraft as reported by a tar1090-compatible feed. Every field
+ * except `hex` may be absent depending on what the aircraft transmits.
+ * @typedef {Object} AircraftMessage
+ * @property {string} hex ICAO 24-bit address, hexadecimal.
+ * @property {string} [flight] Callsign, space-padded at the source.
+ * @property {number} lat Latitude in decimal degrees.
+ * @property {number} lon Longitude in decimal degrees.
+ * @property {number} [alt_baro] Barometric altitude in feet.
+ * @property {number} [gs] Ground speed in knots.
+ * @property {number} [track] Track over ground in degrees true.
+ * @property {string} [squawk] Mode A code, four octal digits.
+ * @property {boolean} [gnd] True when the aircraft reports being on ground.
+ * @property {Array} [mlat] Fields derived by multilateration; a non-empty
+ *   array marks the target as mlat rather than ADS-B.
+ * @property {number} [adsb_version] ADS-B version, present on ADS-B targets.
+ * @property {string} [dataSource] Name of the feed it arrived on, added on
+ *   merge by {@link DataManager.mergeAircraftData}.
+ */
 
-// Set up Tailwind theme colors from config
+/**
+ * An airport from the OurAirports `airports.csv`.
+ * @typedef {Object} Airport
+ * @property {string} icao Four-character ICAO identifier.
+ * @property {string} name Airport name.
+ * @property {number} lat Latitude in decimal degrees.
+ * @property {number} lon Longitude in decimal degrees.
+ * @property {number} elevation Field elevation in feet.
+ * @property {string} type OurAirports size class.
+ * @property {string} municipality Nearest town or city.
+ * @property {string} iso_country ISO 3166-1 alpha-2 country code.
+ */
+
+/**
+ * A navigation aid from the OurAirports `navaids.csv`.
+ * @typedef {Object} Navaid
+ * @property {string} ident Navaid identifier.
+ * @property {string} name Navaid name.
+ * @property {string} type `VOR`, `VORTAC`, `NDB`, `DME` and similar.
+ * @property {number} lat Latitude in decimal degrees.
+ * @property {number} lon Longitude in decimal degrees.
+ * @property {number} elevation Elevation in feet.
+ * @property {number} frequency Frequency in kHz.
+ * @property {string} associated_airport ICAO of the airport it serves.
+ */
+
+/**
+ * A runway from the OurAirports `runways.csv`, as a line between its two
+ * thresholds.
+ * @typedef {Object} Runway
+ * @property {string} airport_ident ICAO of the owning airport.
+ * @property {string} id Runway pair, e.g. `09/27`.
+ * @property {number} length Length in feet.
+ * @property {number} width Width in feet.
+ * @property {string} surface Surface code.
+ * @property {boolean} lighted Whether the runway is lit.
+ * @property {boolean} closed Whether the runway is closed.
+ * @property {number} lat1 Low-end threshold latitude.
+ * @property {number} lon1 Low-end threshold longitude.
+ * @property {number} lat2 High-end threshold latitude.
+ * @property {number} lon2 High-end threshold longitude.
+ * @property {number} le_heading Low-end heading, degrees true.
+ * @property {number} he_heading High-end heading, degrees true.
+ */
+
+/**
+ * One fix read from the POSITION file.
+ * @typedef {Object} OwnPositionFix
+ * @property {number} lat Latitude in decimal degrees.
+ * @property {number} lon Longitude in decimal degrees.
+ * @property {?number} heading Course over ground in degrees true, when the
+ *   source provides it.
+ * @property {?number} speed Speed over ground in knots, when the source
+ *   provides it.
+ * @property {string} format Which parser matched, for the status readout.
+ */
+
+/**
+ * A position projected onto the canvas.
+ * @typedef {Object} ScreenPosition
+ * @property {number} x Canvas X in pixels.
+ * @property {number} y Canvas Y in pixels.
+ * @property {number} dist Distance from home in nautical miles.
+ */
+
+/**
+ * One pooled point of an aircraft trail, stored geographically.
+ * @typedef {Object} TrailPoint
+ * @property {number} lat Latitude in decimal degrees.
+ * @property {number} lon Longitude in decimal degrees.
+ * @property {number} timestamp Epoch milliseconds when it was recorded.
+ * @property {number} x Scratch field reserved by the pool.
+ * @property {number} y Scratch field reserved by the pool.
+ */
+
+/**
+ * Expose the scope theme palettes to Tailwind, when the Play CDN build is
+ * present, so utility classes can reference theme colours.
+ */
 if (window.tailwind) {
     tailwind.config = {
         theme: {
@@ -137,13 +263,16 @@ if (window.tailwind) {
         connectionStatus: "Connecting...",
         isPaused: false,
         showDebugInfo: false,
+        showLabelDetails: true,
         sweepAngle: 0,
         prevSweepAngle: 0,
+        staticEpoch: 0,
         maxRangeNm: CONFIG.DEFAULT_RANGE_NM,
         scopeThemeIndex: 0,
         uiTheme: 'default-dark',
         aircraftFilter: 'all',
         activeAlerts: new Set(),
+        reportedSourceFailures: new Set(),
         lastUiUpdateTime: 0,
         showVectors: false,
         showTrails: true,
@@ -153,6 +282,16 @@ if (window.tailwind) {
         soundEnabled: false,
         homeLat: CONFIG.DEFAULT_HOME_LAT,
         homeLon: CONFIG.DEFAULT_HOME_LON,
+        positionFileEnabled: CONFIG.POSITION_FILE.ENABLED,
+        positionFilePath: CONFIG.POSITION_FILE.PATH,
+        positionPollIntervalMs: CONFIG.POSITION_FILE.POLL_INTERVAL_MS,
+        positionMinMoveNm: CONFIG.POSITION_FILE.MIN_MOVE_NM,
+        showOwnShip: CONFIG.POSITION_FILE.SHOW_OWN_SHIP,
+        ownHeading: null,
+        ownSpeed: null,
+        ownPositionUpdatedAt: 0,
+        ownPositionFormat: null,
+        positionFileStatus: { kind: 'disabled', message: '', at: 0 },
         dataSources: [{ url: CONFIG.DEFAULT_TAR1090_URL, name: 'Default', enabled: true }],
         retryAttempts: {},
         popupAircraft: null,
@@ -283,42 +422,159 @@ if (window.tailwind) {
             }
         }
 
+        /**
+         * Records a rectangle painted this frame, so the next one knows what to
+         * erase. Clipped to the canvas and padded slightly to cover antialiasing.
+         * No-op when {@link CONFIG.PERFORMANCE.DIRTY_REGION_TRACKING} is off.
+         * @param {number} x Left edge.
+         * @param {number} y Top edge.
+         * @param {number} width Width in pixels.
+         * @param {number} height Height in pixels.
+         * @returns {void}
+         */
         markDirty(x, y, width, height) {
-            if (CONFIG.PERFORMANCE.DIRTY_REGION_TRACKING) {
-                this.dirtyRegions.push({ x, y, width, height });
-            }
+            if (!CONFIG.PERFORMANCE.DIRTY_REGION_TRACKING) return;
+            if (!(width > 0) || !(height > 0)) return;
+
+            const pad = 2;                       // cover antialiasing spill
+            const w = elements.canvas ? elements.canvas.width : 0;
+            const h = elements.canvas ? elements.canvas.height : 0;
+            const x0 = Math.max(0, Math.floor(x - pad));
+            const y0 = Math.max(0, Math.floor(y - pad));
+            const x1 = Math.min(w, Math.ceil(x + width + pad));
+            const y1 = Math.min(h, Math.ceil(y + height + pad));
+
+            if (x1 <= x0 || y1 <= y0) return;
+            this.dirtyRegions.push({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 });
         }
 
+        /**
+         * Merges the regions painted last frame into a small set of rectangles
+         * that can be restored individually.
+         *
+         * Returns `null` when partial restore is not worth it — no regions,
+         * tracking disabled, or a combined area above
+         * {@link CanvasRenderer.DIRTY_AREA_LIMIT} of the canvas, where one full
+         * `putImageData` is cheaper than many small ones.
+         * @returns {?Array<{x: number, y: number, width: number, height: number}>}
+         */
+        collectDirtyRegions() {
+            if (!CONFIG.PERFORMANCE.DIRTY_REGION_TRACKING) return null;
+            if (this.dirtyRegions.length === 0) return null;
+
+            // Bucket into horizontal bands, then union each band. Cheap, and a
+            // good fit for targets scattered across the scope.
+            const bandHeight = 64;
+            const bands = new Map();
+
+            for (const r of this.dirtyRegions) {
+                const band = Math.floor(r.y / bandHeight);
+                const existing = bands.get(band);
+                if (!existing) {
+                    bands.set(band, { x0: r.x, y0: r.y, x1: r.x + r.width, y1: r.y + r.height });
+                } else {
+                    existing.x0 = Math.min(existing.x0, r.x);
+                    existing.y0 = Math.min(existing.y0, r.y);
+                    existing.x1 = Math.max(existing.x1, r.x + r.width);
+                    existing.y1 = Math.max(existing.y1, r.y + r.height);
+                }
+            }
+
+            const merged = [];
+            let area = 0;
+            for (const b of bands.values()) {
+                const rect = { x: b.x0, y: b.y0, width: b.x1 - b.x0, height: b.y1 - b.y0 };
+                area += rect.width * rect.height;
+                merged.push(rect);
+            }
+
+            const canvasArea = (elements.canvas.width || 1) * (elements.canvas.height || 1);
+            if (area >= canvasArea * CanvasRenderer.DIRTY_AREA_LIMIT) return null;
+
+            return merged;
+        }
+
+        /**
+         * Drops all tracked dirty regions, at the end of each frame's restore.
+         * @returns {void}
+         */
         clearDirtyRegions() {
             this.dirtyRegions = [];
         }
 
+        /**
+         * Returns the cached bitmap of the static layer, re-rendering it only when
+         * something it depends on changed.
+         *
+         * The cache key covers geometry, range, layer toggles, theme and
+         * `state.staticEpoch` — which {@link PositionManager} bumps when a moving
+         * receiver has actually travelled far enough to matter — so the rings,
+         * compass rose, airports, navaids and runways are rasterised once and
+         * blitted every frame instead of being redrawn.
+         *
+         * Rasterisation happens on the offscreen canvas where the browser
+         * provides one, so it never touches the visible canvas.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {(ImageData|undefined)} The cached bitmap, or `undefined` when
+         *   static caching is disabled in {@link CONFIG}.
+         */
         cacheStaticElements(cx, cy, radius) {
             if (!CONFIG.PERFORMANCE.CACHE_STATIC_ELEMENTS) return;
 
-            const cacheKey = `${cx}-${cy}-${radius}-${state.maxRangeNm}-${state.showAirports}-${state.showNavaids}-${state.showRunways}-${state.scopeThemeIndex}`;
+            // staticEpoch changes only when the receiver has moved far enough to
+            // matter; without it a moving home position would either serve a
+            // stale bitmap or rebuild it on every GPS jitter.
+            const cacheKey = `${cx}-${cy}-${radius}-${state.maxRangeNm}-${state.showAirports}-${state.showNavaids}-${state.showRunways}-${state.scopeThemeIndex}-${state.staticEpoch}`;
             const now = Date.now();
             
             if (this.staticElementsCache && this.staticElementsCache.key === cacheKey) {
                 return this.staticElementsCache.imageData;
             }
 
-            // Create static elements cache
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = elements.canvas.width;
-            tempCanvas.height = elements.canvas.height;
-            const tempCtx = tempCanvas.getContext('2d');
+            // Render into the offscreen canvas when the browser has one, so the
+            // rasterisation never touches the visible canvas; otherwise fall
+            // back to a scratch <canvas>.
+            const width = elements.canvas.width;
+            const height = elements.canvas.height;
+            let tempCtx = null;
+
+            if (this.offscreenCanvas && this.offscreenCtx) {
+                if (this.offscreenCanvas.width !== width || this.offscreenCanvas.height !== height) {
+                    this.offscreenCanvas.width = width;
+                    this.offscreenCanvas.height = height;
+                }
+                this.offscreenCtx.clearRect(0, 0, width, height);
+                tempCtx = this.offscreenCtx;
+            } else {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = width;
+                tempCanvas.height = height;
+                tempCtx = tempCanvas.getContext('2d');
+            }
 
             // Draw static elements
             this.drawStaticScope(tempCtx, cx, cy, radius);
             
-            const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+            const imageData = tempCtx.getImageData(0, 0, width, height);
             this.staticElementsCache = { key: cacheKey, imageData };
             this.lastStaticRender = now;
             
             return imageData;
         }
 
+        /**
+         * Paints the whole static layer in draw order: background, runways,
+         * airports and navaids, the four range rings with their labels, and the
+         * crosshairs and compass rose.
+         * @param {CanvasRenderingContext2D} ctx Target context — the visible canvas
+         *   or an offscreen one being cached.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @returns {void}
+         */
         drawStaticScope(ctx, cx, cy, radius) {
             // Background
             ctx.fillStyle = ThemeManager.getScopeThemeColor('background');
@@ -1261,10 +1517,450 @@ if (window.tailwind) {
         }
     }
 
+    /** Shared request pool used by every outbound fetch. @type {NetworkRequestPool} */
     const networkPool = new NetworkRequestPool();
 
-    // Enhanced Data Management with pre-filtering
+
+    /**
+     * Tracks the home position from a `POSITION` file, so the scope can be
+     * centred on a receiver that moves — a ship, a vehicle, an aircraft.
+     *
+     * A browser cannot watch the filesystem, so the file is polled over HTTP
+     * with a conditional request. While the file is unchanged the server
+     * answers `304 Not Modified` and nothing is re-parsed or re-rendered; when
+     * it changes, the new fix is applied and the scope re-projects.
+     *
+     * Re-projection is gated on {@link CONFIG.POSITION_FILE.MIN_MOVE_NM}: GPS
+     * noise on a moored vessel would otherwise rebuild the static layer several
+     * times a second for movement of a few metres.
+     *
+     * Nothing else in the application needs to change as the receiver moves.
+     * Aircraft positions, trails and the airport/navaid/runway layers are all
+     * stored geographically and projected relative to `state.homeLat/homeLon`,
+     * so moving the origin re-projects all of them correctly.
+     * @namespace PositionManager
+     */
+    const PositionManager = {
+        /** Handle of the polling interval, if running. @type {?number} */
+        intervalId: null,
+        /** `Last-Modified` of the last body actually parsed. @type {?string} */
+        lastModified: null,
+        /** `ETag` of the last body actually parsed. @type {?string} */
+        etag: null,
+        /** Raw text of the last body parsed, to skip identical re-reads. @type {?string} */
+        lastBody: null,
+        /** Consecutive read or parse failures. @type {number} */
+        consecutiveFailures: 0,
+
+        /**
+         * Starts polling if the feature is enabled, replacing any existing
+         * poller. Safe to call whenever the settings change.
+         * @returns {void}
+         */
+        start() {
+            this.stop();
+
+            if (!state.positionFileEnabled) {
+                this.setStatus('disabled', 'Disabled — using the configured home position.');
+                return;
+            }
+
+            this.setStatus('waiting', `Waiting for ${state.positionFilePath}…`);
+            this.poll();
+
+            const interval = setInterval(() => this.poll(), state.positionPollIntervalMs);
+            state.intervals.push(interval);
+            this.intervalId = interval;
+        },
+
+        /**
+         * Stops polling and forgets the cache validators, so a restart re-reads
+         * the file from scratch.
+         * @returns {void}
+         */
+        stop() {
+            if (this.intervalId) {
+                clearInterval(this.intervalId);
+                const i = state.intervals.indexOf(this.intervalId);
+                if (i !== -1) state.intervals.splice(i, 1);
+                this.intervalId = null;
+            }
+            this.lastModified = null;
+            this.etag = null;
+            this.lastBody = null;
+        },
+
+        /**
+         * Reads the file once and applies any new fix.
+         *
+         * Sends `If-Modified-Since`/`If-None-Match` so an unchanged file costs
+         * a 304 rather than a re-parse. Servers that ignore those still work:
+         * the body is compared against the last one read.
+         * @returns {Promise<void>}
+         */
+        async poll() {
+            if (!state.positionFileEnabled) return;
+
+            try {
+                const headers = {};
+                if (this.lastModified) headers['If-Modified-Since'] = this.lastModified;
+                if (this.etag) headers['If-None-Match'] = this.etag;
+
+                const response = await fetch(state.positionFilePath, {
+                    headers,
+                    cache: 'no-cache'
+                });
+
+                if (response.status === 304) {
+                    this.consecutiveFailures = 0;
+                    return;
+                }
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const body = await response.text();
+
+                // Some servers ignore conditional requests; comparing bodies
+                // keeps an unchanged file from re-rendering the scope.
+                if (body === this.lastBody) {
+                    this.consecutiveFailures = 0;
+                    return;
+                }
+
+                const fix = this.parse(body);
+                if (!fix) {
+                    throw new Error('No position found in file');
+                }
+
+                this.lastBody = body;
+                this.lastModified = response.headers?.get?.('Last-Modified') || null;
+                this.etag = response.headers?.get?.('ETag') || null;
+                this.consecutiveFailures = 0;
+
+                this.applyFix(fix);
+            } catch (error) {
+                this.consecutiveFailures++;
+                this.setStatus('error',
+                    `${state.positionFilePath}: ${error.message} ` +
+                    `(${this.consecutiveFailures} consecutive)`);
+
+                // One warning per outage, not one per poll.
+                if (this.consecutiveFailures === 3) {
+                    ErrorBoundary.showWarning(
+                        `POSITION file "${state.positionFilePath}" unreadable: ${error.message}`);
+                }
+            }
+        },
+
+        /**
+         * Moves the scope to a new fix.
+         *
+         * The home position is always updated so the status bar stays truthful,
+         * but the scope is only re-projected once the receiver has moved past
+         * {@link CONFIG.POSITION_FILE.MIN_MOVE_NM} — below that the movement is
+         * indistinguishable from GPS noise and rebuilding the static layer would
+         * be wasted work.
+         * @param {OwnPositionFix} fix Parsed fix.
+         * @returns {void}
+         */
+        applyFix(fix) {
+            const moved = MathUtils.haversineDistance(
+                state.homeLat, state.homeLon, fix.lat, fix.lon);
+
+            state.homeLat = fix.lat;
+            state.homeLon = fix.lon;
+            state.ownHeading = typeof fix.heading === 'number' ? fix.heading : null;
+            state.ownSpeed = typeof fix.speed === 'number' ? fix.speed : null;
+            state.ownPositionUpdatedAt = Date.now();
+            state.ownPositionFormat = fix.format;
+
+            const speedText = state.ownSpeed !== null ? `, ${state.ownSpeed.toFixed(1)} kt` : '';
+            const headingText = state.ownHeading !== null ? `, ${Math.round(state.ownHeading)}°` : '';
+            this.setStatus('ok',
+                `${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)}${headingText}${speedText} ` +
+                `(${fix.format})`);
+
+            if (moved >= state.positionMinMoveNm) {
+                // Distances are memoised against the old origin, and the static
+                // layer was rasterised for it; both must go.
+                MathUtils._cache.clear();
+                state.staticEpoch++;
+                Renderer.markForRedraw();
+                UIManager.updateScopeStatus();
+            }
+        },
+
+        /**
+         * Parses a POSITION file.
+         *
+         * Four shapes are accepted, tried in order, so the file can be whatever
+         * the position source already emits:
+         *
+         * 1. **NMEA 0183** — `$GPGGA` / `$GPRMC` (any talker ID), including
+         *    course and speed over ground from RMC. The last valid sentence in
+         *    the file wins, so appending to a log works.
+         * 2. **JSON** — `{"lat": .., "lon": .., "heading": .., "speed": ..}`,
+         *    also accepting `latitude`/`longitude`/`cog`/`sog`.
+         * 3. **`KEY=VALUE` lines** — `LAT=`, `LON=`, `HEADING=`, `SPEED=`.
+         * 4. **Bare pair** — `-23.9608, -46.3336` or whitespace-separated.
+         *
+         * Blank lines and `#` comments are ignored throughout.
+         * @param {string} text Raw file contents.
+         * @returns {?OwnPositionFix} The fix, or `null` if nothing parsed.
+         */
+        parse(text) {
+            if (!text) return null;
+
+            const cleaned = text
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'))
+                .join('\n');
+
+            if (!cleaned) return null;
+
+            // NMEA is claimed exclusively. Otherwise a sentence this parser
+            // rejects — a GGA with no fix, an RMC carrying a navigation
+            // warning — would fall through to parseBarePair, which would read
+            // the timestamp and a coordinate field as a lat/lon pair and send
+            // the scope somewhere fictional.
+            const fix = cleaned.startsWith('$')
+                ? this.parseNMEA(cleaned)
+                : (this.parseJSON(cleaned)
+                    || this.parseKeyValue(cleaned)
+                    || this.parseBarePair(cleaned));
+
+            return this.validate(fix);
+        },
+
+        /**
+         * Rejects a fix whose coordinates are not on Earth.
+         *
+         * A truncated or half-written file can parse into plausible-looking
+         * numbers, so this is the last gate before the scope is moved.
+         * @param {?OwnPositionFix} fix Candidate fix.
+         * @returns {?OwnPositionFix} The fix, or `null` if out of range.
+         */
+        validate(fix) {
+            if (!fix) return null;
+            if (!Number.isFinite(fix.lat) || !Number.isFinite(fix.lon)) return null;
+            if (Math.abs(fix.lat) > 90 || Math.abs(fix.lon) > 180) return null;
+
+            if (typeof fix.heading === 'number') {
+                fix.heading = ((fix.heading % 360) + 360) % 360;
+            }
+            if (typeof fix.speed === 'number' && fix.speed < 0) {
+                fix.speed = null;
+            }
+            return fix;
+        },
+
+        /**
+         * Parses the last valid GGA or RMC sentence in the text.
+         * @param {string} text Cleaned file contents.
+         * @returns {?OwnPositionFix}
+         */
+        parseNMEA(text) {
+            const sentences = text.split('\n').filter(l => l.startsWith('$'));
+            if (sentences.length === 0) return null;
+
+            for (let i = sentences.length - 1; i >= 0; i--) {
+                const parts = sentences[i].split('*')[0].split(',');
+                const type = parts[0].slice(3);   // drop the talker ID
+
+                if (type === 'GGA') {
+                    // $--GGA,time,lat,N/S,lon,E/W,quality,...
+                    if (parts[6] === '0') continue;      // fix quality 0 = no fix
+                    const lat = this.parseNMEACoord(parts[2], parts[3]);
+                    const lon = this.parseNMEACoord(parts[4], parts[5]);
+                    if (lat === null || lon === null) continue;
+                    return { lat, lon, heading: null, speed: null, format: 'NMEA GGA' };
+                }
+
+                if (type === 'RMC') {
+                    // $--RMC,time,status,lat,N/S,lon,E/W,sog,cog,...
+                    if (parts[2] !== 'A') continue;      // V = navigation warning
+                    const lat = this.parseNMEACoord(parts[3], parts[4]);
+                    const lon = this.parseNMEACoord(parts[5], parts[6]);
+                    if (lat === null || lon === null) continue;
+                    const speed = parseFloat(parts[7]);
+                    const heading = parseFloat(parts[8]);
+                    return {
+                        lat, lon,
+                        heading: Number.isFinite(heading) ? heading : null,
+                        speed: Number.isFinite(speed) ? speed : null,
+                        format: 'NMEA RMC'
+                    };
+                }
+            }
+
+            return null;
+        },
+
+        /**
+         * Converts an NMEA `ddmm.mmmm` / `dddmm.mmmm` field plus its hemisphere
+         * into decimal degrees.
+         * @param {string} value Coordinate field.
+         * @param {string} hemisphere `N`, `S`, `E` or `W`.
+         * @returns {?number} Decimal degrees, or `null` if unparseable.
+         */
+        parseNMEACoord(value, hemisphere) {
+            if (!value || !hemisphere) return null;
+
+            const dot = value.indexOf('.');
+            if (dot < 3) return null;
+
+            const degrees = parseInt(value.slice(0, dot - 2), 10);
+            const minutes = parseFloat(value.slice(dot - 2));
+            if (!Number.isFinite(degrees) || !Number.isFinite(minutes)) return null;
+
+            const decimal = degrees + minutes / 60;
+            const sign = (hemisphere === 'S' || hemisphere === 'W') ? -1 : 1;
+            return decimal * sign;
+        },
+
+        /**
+         * Parses a JSON object holding a position.
+         * @param {string} text Cleaned file contents.
+         * @returns {?OwnPositionFix}
+         */
+        parseJSON(text) {
+            if (!text.startsWith('{') && !text.startsWith('[')) return null;
+
+            let parsed;
+            try {
+                parsed = JSON.parse(text);
+            } catch {
+                return null;
+            }
+
+            const o = Array.isArray(parsed) ? parsed[parsed.length - 1] : parsed;
+            if (!o || typeof o !== 'object') return null;
+
+            const lat = this.firstNumber(o.lat, o.latitude, o.Lat, o.Latitude);
+            const lon = this.firstNumber(o.lon, o.lng, o.longitude, o.Lon, o.Longitude);
+            if (lat === null || lon === null) return null;
+
+            return {
+                lat, lon,
+                heading: this.firstNumber(o.heading, o.cog, o.course, o.track),
+                speed: this.firstNumber(o.speed, o.sog, o.speedKnots),
+                format: 'JSON'
+            };
+        },
+
+        /**
+         * Parses `KEY=VALUE` lines.
+         * @param {string} text Cleaned file contents.
+         * @returns {?OwnPositionFix}
+         */
+        parseKeyValue(text) {
+            if (!text.includes('=')) return null;
+
+            const values = {};
+            for (const line of text.split('\n')) {
+                const eq = line.indexOf('=');
+                if (eq === -1) continue;
+                values[line.slice(0, eq).trim().toUpperCase()] =
+                    parseFloat(line.slice(eq + 1).trim());
+            }
+
+            const lat = this.firstNumber(values.LAT, values.LATITUDE);
+            const lon = this.firstNumber(values.LON, values.LNG, values.LONGITUDE);
+            if (lat === null || lon === null) return null;
+
+            return {
+                lat, lon,
+                heading: this.firstNumber(values.HEADING, values.COG, values.COURSE),
+                speed: this.firstNumber(values.SPEED, values.SOG),
+                format: 'KEY=VALUE'
+            };
+        },
+
+        /**
+         * Parses a bare `lat, lon` pair, optionally followed by heading and
+         * speed.
+         * @param {string} text Cleaned file contents.
+         * @returns {?OwnPositionFix}
+         */
+        parseBarePair(text) {
+            const firstLine = text.split('\n')[0];
+            const numbers = firstLine.split(/[\s,;]+/)
+                .map(v => parseFloat(v))
+                .filter(v => Number.isFinite(v));
+
+            if (numbers.length < 2) return null;
+
+            return {
+                lat: numbers[0],
+                lon: numbers[1],
+                heading: numbers.length > 2 ? numbers[2] : null,
+                speed: numbers.length > 3 ? numbers[3] : null,
+                format: 'lat/lon pair'
+            };
+        },
+
+        /**
+         * First argument that is a finite number, with latitude and longitude
+         * range-checked by the caller.
+         * @param {...*} values Candidates, in priority order.
+         * @returns {?number}
+         */
+        firstNumber(...values) {
+            for (const v of values) {
+                const n = typeof v === 'string' ? parseFloat(v) : v;
+                if (typeof n === 'number' && Number.isFinite(n)) return n;
+            }
+            return null;
+        },
+
+        /**
+         * Records the current tracking state and mirrors it into the settings
+         * panel when that is open.
+         * @param {('disabled'|'waiting'|'ok'|'error')} kind Status class.
+         * @param {string} message Human-readable detail.
+         * @returns {void}
+         */
+        setStatus(kind, message) {
+            state.positionFileStatus = { kind, message, at: Date.now() };
+
+            const el = document.getElementById('position-file-status');
+            if (el) {
+                el.textContent = message;
+                el.style.color = kind === 'error'
+                    ? '#BF616A'
+                    : (kind === 'ok' ? '#A3BE8C' : 'var(--color-text-muted)');
+            }
+        },
+
+        /**
+         * Whether the last fix is old enough to be untrustworthy.
+         * @returns {boolean} True when tracking is on but the fix has gone stale.
+         */
+        isStale() {
+            if (!state.positionFileEnabled || !state.ownPositionUpdatedAt) return false;
+            return (Date.now() - state.ownPositionUpdatedAt) > CONFIG.POSITION_FILE.STALE_AFTER_MS;
+        }
+    };
+
+    /**
+     * Fetching, merging and validating aircraft feeds. Handles multiple
+     * simultaneous sources, retry with backoff, and classification of each
+     * target (mlat vs ADS-B, military vs civilian).
+     * @namespace DataManager
+     */
     const DataManager = {
+        /**
+         * Polls every enabled data source in parallel and merges the results.
+         *
+         * Partial failure is tolerated: as long as one source answers, the
+         * scope keeps updating and the status bar reads
+         * `Partial (n failed)`. Each result is paired with its own source
+         * before filtering, so a warning always names the feed that actually
+         * failed, and each outage is reported once rather than once per poll.
+         * @returns {Promise<void>}
+         */
         async fetchData() {
             try {
                 const enabledSources = state.dataSources.filter(source => source.enabled);
@@ -1635,6 +2331,88 @@ if (window.tailwind) {
             ctx.textAlign = 'center';
         },
         
+        /**
+         * Draws an aircraft trail, projecting its stored lat/lon history to screen
+         * space for this frame.
+         *
+         * Each segment fades with age against `trailFadeTimeMinutes`, and segments
+         * are trimmed back to leave a small gap around the symbol so the trail does
+         * not obscure the target.
+         *
+         * Two things keep long trails affordable: the projection is memoised in
+         * a {@link WeakMap} keyed by the aircraft entry, so it is only redone
+         * when the trail or the projection actually changes, and at most
+         * {@link CONFIG.TRAIL_GRADIENT_SEGMENTS} segments are stroked however
+         * many points the trail holds.
+         * @param {Object} ac Displayed aircraft entry.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @param {number} radius Scope radius in pixels.
+         * @param {string} color Trail colour.
+         * @returns {void}
+         */
+        /**
+         * Draws the own-ship marker at the scope centre while the receiver is
+         * being tracked from the POSITION file.
+         *
+         * A hull outline pointing along course over ground when the fix carries
+         * one, otherwise a circled cross. It dims and turns the emergency colour
+         * once the fix goes stale, so a dead GPS feed is visible on the scope
+         * rather than only in the status bar.
+         * @param {number} cx Canvas centre X.
+         * @param {number} cy Canvas centre Y.
+         * @returns {void}
+         */
+        drawOwnShip(cx, cy) {
+            if (!state.showOwnShip || !state.positionFileEnabled) return;
+
+            const ctx = elements.ctx;
+            const size = CONFIG.AIRCRAFT_SYMBOL_SIZE * 2.5;
+            const stale = PositionManager.isStale();
+
+            if (canvasRenderer) {
+                const reach = size + 10;
+                canvasRenderer.markDirty(cx - reach, cy - reach, reach * 2, reach * 2);
+            }
+
+            ctx.save();
+            ctx.globalAlpha = stale ? 0.45 : 1;
+            ctx.strokeStyle = ctx.fillStyle = stale
+                ? ThemeManager.getScopeThemeColor('emergency')
+                : ThemeManager.getScopeThemeColor('selected');
+            ctx.lineWidth = 1.5;
+
+            if (typeof state.ownHeading === 'number') {
+                // Hull outline pointing along course over ground.
+                const rad = MathUtils.toRad(state.ownHeading - 90);
+                const cos = Math.cos(rad), sin = Math.sin(rad);
+                const hull = [[size, 0], [-size * 0.6, size * 0.55],
+                              [-size * 0.35, 0], [-size * 0.6, -size * 0.55]];
+
+                ctx.beginPath();
+                hull.forEach(([hx, hy], i) => {
+                    const px = cx + hx * cos - hy * sin;
+                    const py = cy + hx * sin + hy * cos;
+                    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                });
+                ctx.closePath();
+                ctx.stroke();
+            } else {
+                // No course available: a plain circled cross marks the origin.
+                ctx.beginPath();
+                ctx.arc(cx, cy, size * 0.7, 0, 2 * Math.PI);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx - size, cy);
+                ctx.lineTo(cx + size, cy);
+                ctx.moveTo(cx, cy - size);
+                ctx.lineTo(cx, cy + size);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        },
+
         drawAircraftTrail(ac, cx, cy, radius, color) {
             const ctx = elements.ctx;
             const currentTime = Date.now();
@@ -2402,16 +3180,39 @@ if (window.tailwind) {
                 connectionStatusHTML = '<span class="status-icon status-connecting"></span>CONN: ' + state.connectionStatus;
             }
             
+            // A moving receiver gets its own segment: course, speed and whether
+            // the fix is still fresh.
+            let positionLabel = `POS: ${state.homeLat.toFixed(5)}, ${state.homeLon.toFixed(5)}`;
+            if (state.positionFileEnabled) {
+                const stale = PositionManager.isStale();
+                const icon = state.positionFileStatus.kind === 'error' || stale
+                    ? '<span class="status-icon status-error"></span>'
+                    : (state.positionFileStatus.kind === 'ok'
+                        ? '<span class="status-icon status-ok"></span>'
+                        : '<span class="status-icon status-connecting"></span>');
+                const cog = typeof state.ownHeading === 'number'
+                    ? ` ${Math.round(state.ownHeading).toString().padStart(3, '0')}°` : '';
+                const sog = typeof state.ownSpeed === 'number'
+                    ? ` ${state.ownSpeed.toFixed(1)}kt` : '';
+                positionLabel = `${icon}UNDERWAY: ${state.homeLat.toFixed(5)}, ` +
+                                `${state.homeLon.toFixed(5)}${cog}${sog}` +
+                                (stale ? ' (STALE)' : '');
+            }
+
             elements.scopeStatusBar.innerHTML = [
                 `RANGE: ${state.maxRangeNm} NM`,
                 connectionStatusHTML,
                 `TRACKED: ${Object.keys(state.displayedAircraft).length}`,
                 `FILTER: ${state.aircraftFilter.toUpperCase()}`,
                 dataStatus,
-                `POS: ${state.homeLat.toFixed(5)}, ${state.homeLon.toFixed(5)}`
+                positionLabel
             ].map(item => `<span>${item}</span>`).join('<span class="mx-2">|</span>');
         },
         
+        /**
+         * Syncs the toolbar tooltips with the current ON/OFF state of each layer.
+         * @returns {void}
+         */
         updateTooltips() {
             const vectorsTooltip = elements.vectorsButton?.querySelector('.tooltip-text');
             const trailsTooltip = elements.trailsButton?.querySelector('.tooltip-text'); 
@@ -2936,10 +3737,19 @@ if (window.tailwind) {
             // Settings save button
             const saveSettingsBtn = document.getElementById('save-settings-btn');
             this.addEventListenerWithCleanup(saveSettingsBtn, 'click', this.saveSettings.bind(this));
+
+            // Clear stored settings
+            const clearStorageBtn = document.getElementById('clear-storage-btn');
+            this.addEventListenerWithCleanup(clearStorageBtn, 'click', this.clearStorage.bind(this));
             
             // Add source button
             const addSourceBtn = document.getElementById('add-source-btn');
             this.addEventListenerWithCleanup(addSourceBtn, 'click', this.addDataSource.bind(this));
+
+            // Home fields follow the tracking checkbox without waiting for Save
+            const positionToggle = document.getElementById('position-file-enabled');
+            this.addEventListenerWithCleanup(positionToggle, 'change',
+                this.updateHomeFieldState.bind(this));
             
             // Mobile menu
             this.addEventListenerWithCleanup(elements.mobileMenuButton, 'click', this.toggleMobileMenu);
@@ -3149,22 +3959,107 @@ if (window.tailwind) {
             this.saveUIState();
         },
         
+        /**
+         * Fills the settings modal with the current {@link state} values and
+         * shows it.
+         * @returns {void}
+         */
         showSettings() {
-            document.getElementById('home-lat').value = state.homeLat;
-            document.getElementById('home-lon').value = state.homeLon;
-            document.getElementById('sound-enabled').checked = state.soundEnabled;
-            document.getElementById('show-airports').checked = state.showAirports;
-            document.getElementById('show-navaids').checked = state.showNavaids;
-            document.getElementById('show-runways').checked = state.showRunways;
-            document.getElementById('min-runway-length').value = state.minRunwayLength;
-            document.getElementById('max-trail-length').value = state.maxTrailLength;
-            document.getElementById('trail-fade-time').value = state.trailFadeTimeMinutes;
-            document.getElementById('trail-width').value = state.trailWidth;
-            
+            const set = (id, value, prop = 'value') => {
+                const el = document.getElementById(id);
+                if (el) el[prop] = value;
+            };
+
+            set('home-lat', state.homeLat);
+            set('home-lon', state.homeLon);
+            set('sound-enabled', state.soundEnabled, 'checked');
+            set('show-airports', state.showAirports, 'checked');
+            set('show-navaids', state.showNavaids, 'checked');
+            set('show-runways', state.showRunways, 'checked');
+            set('min-runway-length', state.minRunwayLength);
+            set('max-trail-length', state.maxTrailLength);
+            set('trail-fade-time', state.trailFadeTimeMinutes);
+            set('trail-width', state.trailWidth);
+
+            // Moving receiver
+            set('position-file-enabled', state.positionFileEnabled, 'checked');
+            set('position-file-path', state.positionFilePath);
+            set('position-poll-interval', state.positionPollIntervalMs);
+            set('position-min-move', state.positionMinMoveNm);
+            set('show-own-ship', state.showOwnShip, 'checked');
+
+            // Display
+            set('show-label-details', state.showLabelDetails, 'checked');
+            set('aircraft-symbol-size', CONFIG.AIRCRAFT_SYMBOL_SIZE);
+            set('heading-line-length', CONFIG.HEADING_LINE_LENGTH);
+            set('vector-minutes', CONFIG.VECTOR_MINUTES);
+
+            // Performance
+            set('sweep-duration', CONFIG.SWEEP_DURATION_S);
+            set('render-throttle', CONFIG.CANVAS_RENDER_THROTTLE_MS);
+            set('ui-update-interval', CONFIG.UI_UPDATE_INTERVAL_MS);
+            set('max-airports-display', CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY);
+            set('smoothing-factor', CONFIG.SMOOTHING_FACTOR);
+
+            this.populateThemeSelects();
+            this.updateHomeFieldState();
             this.updateDataSourcesList();
+            PositionManager.setStatus(state.positionFileStatus.kind,
+                                      state.positionFileStatus.message ||
+                                      'Disabled — using the configured home position.');
             elements.settingsModal.classList.remove('hidden');
         },
+
+        /**
+         * Fills the settings-panel theme selects from {@link UI_THEMES} and
+         * {@link SCOPE_THEMES} and selects the active entries.
+         *
+         * The top-bar dropdowns remain the quick way to change theme; these
+         * exist so every setting is reachable from one place.
+         * @returns {void}
+         */
+        populateThemeSelects() {
+            const uiSelect = document.getElementById('settings-ui-theme');
+            const scopeSelect = document.getElementById('settings-scope-theme');
+
+            if (uiSelect && !uiSelect.options.length) {
+                uiSelect.innerHTML = UI_THEMES
+                    .map(t => `<option value="${t.key}">${t.group} — ${t.name}</option>`)
+                    .join('');
+            }
+            if (scopeSelect && !scopeSelect.options.length) {
+                scopeSelect.innerHTML = SCOPE_THEMES
+                    .map((t, i) => `<option value="${i}">${t.name}</option>`)
+                    .join('');
+            }
+            if (uiSelect) uiSelect.value = state.uiTheme;
+            if (scopeSelect) scopeSelect.value = String(state.scopeThemeIndex);
+        },
+
+        /**
+         * Disables the manual home-position fields while the POSITION file is
+         * driving them, so the panel cannot promise an edit it will overwrite on
+         * the next poll.
+         * @returns {void}
+         */
+        updateHomeFieldState() {
+            const tracking = !!document.getElementById('position-file-enabled')?.checked;
+            ['home-lat', 'home-lon'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.readOnly = tracking;
+                el.style.opacity = tracking ? '0.5' : '';
+                el.title = tracking
+                    ? 'Driven by the POSITION file while tracking is enabled'
+                    : '';
+            });
+        },
         
+        /**
+         * Re-renders the data-source editor rows, each with a live URL validity
+         * badge from {@link URLValidator.isValidDataSourceUrl}.
+         * @returns {void}
+         */
         updateDataSourcesList() {
             const sourcesDiv = document.getElementById('data-sources-list');
             sourcesDiv.innerHTML = state.dataSources.map((source, i) => `
@@ -3213,6 +4108,56 @@ if (window.tailwind) {
                 state.maxTrailLength = parseInt(document.getElementById('max-trail-length').value) || CONFIG.MAX_TRAIL_LENGTH;
                 state.trailFadeTimeMinutes = parseInt(document.getElementById('trail-fade-time').value) || CONFIG.TRAIL_FADE_TIME_MINUTES;
                 state.trailWidth = parseInt(document.getElementById('trail-width').value) || 2;
+
+                const num = (id, fallback, min, max) => {
+                    const el = document.getElementById(id);
+                    if (!el) return fallback;
+                    const v = parseFloat(el.value);
+                    if (!Number.isFinite(v)) return fallback;
+                    return Math.min(max, Math.max(min, v));
+                };
+                const bool = (id, fallback) =>
+                    document.getElementById(id)?.checked ?? fallback;
+
+                // Moving receiver
+                const wasTracking = state.positionFileEnabled;
+                const previousPath = state.positionFilePath;
+                const previousInterval = state.positionPollIntervalMs;
+
+                state.positionFileEnabled = bool('position-file-enabled', state.positionFileEnabled);
+                state.positionFilePath =
+                    (document.getElementById('position-file-path')?.value || '').trim()
+                    || CONFIG.POSITION_FILE.PATH;
+                state.positionPollIntervalMs = num('position-poll-interval',
+                    CONFIG.POSITION_FILE.POLL_INTERVAL_MS, 250, 60000);
+                state.positionMinMoveNm = num('position-min-move',
+                    CONFIG.POSITION_FILE.MIN_MOVE_NM, 0, 5);
+                state.showOwnShip = bool('show-own-ship', state.showOwnShip);
+
+                // Display
+                state.showLabelDetails = bool('show-label-details', state.showLabelDetails);
+                CONFIG.AIRCRAFT_SYMBOL_SIZE = num('aircraft-symbol-size', CONFIG.AIRCRAFT_SYMBOL_SIZE, 1, 12);
+                CONFIG.HEADING_LINE_LENGTH = num('heading-line-length', CONFIG.HEADING_LINE_LENGTH, 0, 60);
+                CONFIG.VECTOR_MINUTES = num('vector-minutes', CONFIG.VECTOR_MINUTES, 0, 30);
+
+                // Performance
+                CONFIG.SWEEP_DURATION_S = num('sweep-duration', CONFIG.SWEEP_DURATION_S, 0, 30);
+                CONFIG.CANVAS_RENDER_THROTTLE_MS = num('render-throttle', CONFIG.CANVAS_RENDER_THROTTLE_MS, 8, 200);
+                CONFIG.UI_UPDATE_INTERVAL_MS = num('ui-update-interval', CONFIG.UI_UPDATE_INTERVAL_MS, 100, 5000);
+                CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY = num('max-airports-display',
+                    CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY, 1, 500);
+                CONFIG.SMOOTHING_FACTOR = num('smoothing-factor', CONFIG.SMOOTHING_FACTOR, 0, 0.9);
+
+                // Theme
+                const uiSelect = document.getElementById('settings-ui-theme');
+                if (uiSelect && uiSelect.value && uiSelect.value !== state.uiTheme) {
+                    state.uiTheme = uiSelect.value;
+                    ThemeManager.applyUiTheme();
+                }
+                const scopeSelect = document.getElementById('settings-scope-theme');
+                if (scopeSelect && scopeSelect.value !== '') {
+                    state.scopeThemeIndex = parseInt(scopeSelect.value, 10) || 0;
+                }
                 
                 // Validate and save data sources
                 let hasValidSource = false;
@@ -3238,11 +4183,35 @@ if (window.tailwind) {
                     ErrorBoundary.showWarning('At least one valid and enabled data source is required');
                     return;
                 }
+
+                if (state.positionFileEnabled && !state.positionFilePath) {
+                    ErrorBoundary.showWarning('A POSITION file path is required while tracking is enabled');
+                    return;
+                }
                 
                 // Save to localStorage with debouncing if enabled
                 const settings = {
                     homeLat: state.homeLat,
                     homeLon: state.homeLon,
+                    positionFileEnabled: state.positionFileEnabled,
+                    positionFilePath: state.positionFilePath,
+                    positionPollIntervalMs: state.positionPollIntervalMs,
+                    positionMinMoveNm: state.positionMinMoveNm,
+                    showOwnShip: state.showOwnShip,
+                    showLabelDetails: state.showLabelDetails,
+                    scopeThemeIndex: state.scopeThemeIndex,
+                    display: {
+                        aircraftSymbolSize: CONFIG.AIRCRAFT_SYMBOL_SIZE,
+                        headingLineLength: CONFIG.HEADING_LINE_LENGTH,
+                        vectorMinutes: CONFIG.VECTOR_MINUTES
+                    },
+                    performance: {
+                        sweepDurationS: CONFIG.SWEEP_DURATION_S,
+                        renderThrottleMs: CONFIG.CANVAS_RENDER_THROTTLE_MS,
+                        uiUpdateIntervalMs: CONFIG.UI_UPDATE_INTERVAL_MS,
+                        maxAirportsDisplay: CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY,
+                        smoothingFactor: CONFIG.SMOOTHING_FACTOR
+                    },
                     soundEnabled: state.soundEnabled,
                     dataSources: state.dataSources,
                     showAirports: state.showAirports,
@@ -3264,6 +4233,19 @@ if (window.tailwind) {
                 }
                 
                 elements.settingsModal.classList.add('hidden');
+
+                // Restart position tracking when it was switched on or off, or
+                // its file or cadence changed.
+                if (state.positionFileEnabled !== wasTracking ||
+                    state.positionFilePath !== previousPath ||
+                    state.positionPollIntervalMs !== previousInterval) {
+                    PositionManager.start();
+                }
+
+                // The home position, range or projection may all have changed.
+                MathUtils._cache.clear();
+                state.staticEpoch++;
+                Renderer.markForRedraw();
                 
                 // Clear displayed aircraft to force refresh
                 state.displayedAircraft = {};
@@ -3763,6 +4745,7 @@ if (window.tailwind) {
                 if (shouldRender) {
                     Renderer.drawScope(cx, cy, radius);
                     Renderer.drawAircraft(w, cx, cy, radius);
+                    Renderer.drawOwnShip(cx, cy);
                     Renderer.drawSweep(cx, cy, radius);
                     Renderer.needsRedraw = false;
                     state.lastRenderTime = time;
@@ -3840,6 +4823,9 @@ if (window.tailwind) {
                 // Load CSV data
                 CSVDataManager.loadAllData();
                 
+                // Begin tracking a moving receiver, if configured
+                PositionManager.start();
+                
                 // Start data fetching with network optimization
                 DataManager.fetchData();
                 const fetchInterval = setInterval(() => DataManager.fetchData(), CONFIG.FETCH_INTERVAL_MS);
@@ -3880,6 +4866,34 @@ if (window.tailwind) {
                     state.aircraftSectionExpanded = settings.aircraftSectionExpanded !== undefined ? settings.aircraftSectionExpanded : true;
                     state.metricsSectionExpanded = settings.metricsSectionExpanded !== undefined ? settings.metricsSectionExpanded : true;
                     state.selectedHex = settings.selectedHex || null;
+
+                    state.positionFileEnabled = settings.positionFileEnabled === true;
+                    state.positionFilePath = settings.positionFilePath || CONFIG.POSITION_FILE.PATH;
+                    state.positionPollIntervalMs = settings.positionPollIntervalMs ||
+                        CONFIG.POSITION_FILE.POLL_INTERVAL_MS;
+                    state.positionMinMoveNm = typeof settings.positionMinMoveNm === 'number'
+                        ? settings.positionMinMoveNm : CONFIG.POSITION_FILE.MIN_MOVE_NM;
+                    state.showOwnShip = settings.showOwnShip !== false;
+                    state.showLabelDetails = settings.showLabelDetails !== false;
+                    if (typeof settings.scopeThemeIndex === 'number' &&
+                        settings.scopeThemeIndex >= 0 &&
+                        settings.scopeThemeIndex < SCOPE_THEMES.length) {
+                        state.scopeThemeIndex = settings.scopeThemeIndex;
+                    }
+
+                    // Display and performance settings live on CONFIG, which the
+                    // rest of the code reads directly.
+                    const d = settings.display || {};
+                    if (typeof d.aircraftSymbolSize === 'number') CONFIG.AIRCRAFT_SYMBOL_SIZE = d.aircraftSymbolSize;
+                    if (typeof d.headingLineLength === 'number') CONFIG.HEADING_LINE_LENGTH = d.headingLineLength;
+                    if (typeof d.vectorMinutes === 'number') CONFIG.VECTOR_MINUTES = d.vectorMinutes;
+
+                    const perf = settings.performance || {};
+                    if (typeof perf.sweepDurationS === 'number') CONFIG.SWEEP_DURATION_S = perf.sweepDurationS;
+                    if (typeof perf.renderThrottleMs === 'number') CONFIG.CANVAS_RENDER_THROTTLE_MS = perf.renderThrottleMs;
+                    if (typeof perf.uiUpdateIntervalMs === 'number') CONFIG.UI_UPDATE_INTERVAL_MS = perf.uiUpdateIntervalMs;
+                    if (typeof perf.maxAirportsDisplay === 'number') CONFIG.AIRPORT_DISPLAY.MAX_AIRPORTS_DISPLAY = perf.maxAirportsDisplay;
+                    if (typeof perf.smoothingFactor === 'number') CONFIG.SMOOTHING_FACTOR = perf.smoothingFactor;
                 }
                 
                 // Load UI state
@@ -3968,8 +4982,15 @@ if (window.tailwind) {
             }
         },
         
+        /**
+         * Tears the application down: stops the render loop, removes every
+         * registered listener/interval/timeout, empties the object pools and
+         * clears the distance and static-scope caches. Bound to `beforeunload`.
+         * @returns {void}
+         */
         cleanup() {
             ScopeLoop.stop();
+            PositionManager.stop();
             EventHandlers.cleanup();
             
             // Clean up object pools

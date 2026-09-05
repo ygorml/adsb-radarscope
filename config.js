@@ -14,62 +14,188 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
-// ADSB Radarscope Configuration
-// This file contains all user-configurable settings and constants
+/**
+ * @file User-configurable settings and constants for ADSB Radarscope.
+ *
+ * Loaded before `app.js`, which reads these as globals. `DEFAULT_HOME_LAT`,
+ * `DEFAULT_HOME_LON` and `DEFAULT_TAR1090_URL` must be set before the scope
+ * will show anything; the rest have working defaults.
+ *
+ * Values under `DEFAULT_*` and the display/trail settings are only the
+ * initial state — once the user saves the settings panel, localStorage wins
+ * on subsequent loads. The `PERFORMANCE`, range-limit and timing constants
+ * have no UI and are read from here on every run.
+ *
+ * @see {@link https://github.com/dustsignal/adsb-scope}
+ * @license GPL-3.0-or-later
+ */
 
+/**
+ * Global application configuration.
+ * @namespace CONFIG
+ */
 const CONFIG = {
+    /** Version string, shown in the title bar and the version link. @type {string} */
     VERSION: '0.0.2',
     
-    // Home Position Settings
+    // ---- Home Position -------------------------------------------------
+    /** Latitude of the scope centre, decimal degrees. **Set this.** @type {number} */
     DEFAULT_HOME_LAT: 0.0,
+    /** Longitude of the scope centre, decimal degrees. **Set this.** @type {number} */
     DEFAULT_HOME_LON: -0.0,
+    /** Range of the outer ring at startup, nautical miles. @type {number} */
     DEFAULT_RANGE_NM: 50,
     
-    // Data Source Settings
+    // ---- Data Sources --------------------------------------------------
+    /**
+     * URL of the aircraft feed. Any tar1090 / dump1090 / PiAware
+     * `aircraft.json` endpoint works. **Set this.**
+     *
+     * Cross-origin hosts must send `Access-Control-Allow-Origin`.
+     * More sources can be added at runtime from the settings panel.
+     * @type {string}
+     */
     DEFAULT_TAR1090_URL: '[your-ip-path]/aircraft.json',
+    /**
+     * Locations of the OurAirports reference CSVs. Relative paths resolve
+     * against the page, so `data/airports.csv` works for a local copy.
+     * @type {{AIRPORTS: string, NAVAIDS: string, RUNWAYS: string}}
+     */
     DATA_PATHS: {
         AIRPORTS: '[your-ip-path]/data/airports.csv',
         NAVAIDS: '[your-ip-path]/data/navaids.csv',
         RUNWAYS: '[your-ip-path]/data/runways.csv'
     },
+    /** How often each enabled source is polled, ms. @type {number} */
     FETCH_INTERVAL_MS: 1000,
+    /** Per-request abort timeout, ms. @type {number} */
     FETCH_TIMEOUT_MS: 5000,
+    /** Attempts before a source is reported as failed. @type {number} */
     MAX_RETRY_ATTEMPTS: 3,
+    /** First retry delay, ms; doubles on each further attempt. @type {number} */
     INITIAL_RETRY_DELAY_MS: 1000,
     
-    // Performance Settings
-    SWEEP_DURATION_S: 3.8, // You can make this 0.0 for realtime changes of the aircraft.json, not recommended
+    // ---- Moving receiver (POSITION file) -------------------------------
+    /**
+     * Tracks the home position from a file on disk, for a receiver that moves:
+     * a ship, a vehicle, an aircraft.
+     *
+     * The browser cannot watch a file, so the file is polled over HTTP with
+     * conditional requests — served from the same directory as the page, a
+     * rewritten `POSITION` costs one 304 per poll until it actually changes.
+     * Point whatever produces your fix (a GPS daemon, `gpspipe`, an NMEA
+     * multiplexer) at that file.
+     *
+     * Everything the scope stores is geographic, so trails, airports, navaids
+     * and runways all re-project correctly as the receiver moves.
+     * @namespace CONFIG.POSITION_FILE
+     */
+    POSITION_FILE: {
+        /** Master switch. When off, the home position comes from
+         * `DEFAULT_HOME_LAT`/`LON` or the settings panel. @type {boolean} */
+        ENABLED: false,
+        /** Path to the file, relative to the page or absolute. @type {string} */
+        PATH: 'POSITION',
+        /** How often the file is polled, ms. @type {number} */
+        POLL_INTERVAL_MS: 2000,
+        /**
+         * How far the receiver must move before the scope is re-projected, in
+         * nautical miles. The default of 0.005 nm (~9 m) is below GPS noise, so
+         * a moored vessel does not rebuild the static layer on every jitter.
+         * @type {number}
+         */
+        MIN_MOVE_NM: 0.005,
+        /** Draw the own-ship marker at the scope centre. @type {boolean} */
+        SHOW_OWN_SHIP: true,
+        /** Age at which a fix is reported as stale in the status bar, ms.
+         * @type {number} */
+        STALE_AFTER_MS: 30000
+    },
+    
+    // ---- Performance ---------------------------------------------------
+    /**
+     * Seconds for one full revolution of the sweep. Targets are repainted
+     * only as the sweep passes over them, so this also sets how long a
+     * position may be stale on screen.
+     *
+     * `0.0` makes every fetch appear immediately, which loses the radar
+     * behaviour and is not recommended.
+     * @type {number}
+     */
+    SWEEP_DURATION_S: 3.8,
+    /**
+     * An aircraft is dropped after `SWEEP_DURATION_S × this` seconds without
+     * an update.
+     * @type {number}
+     */
     AIRCRAFT_TIMEOUT_FACTOR: 3,
+    /** Refresh period for the side panels, ms — deliberately slower than the
+     * canvas, since tables are expensive to rebuild. @type {number} */
     UI_UPDATE_INTERVAL_MS: 700,
-    CANVAS_RENDER_THROTTLE_MS: 16, // ~60fps
+    /** Minimum gap between rendered frames, ms. 16 ≈ 60 fps; raise to 32
+     * (≈30 fps) on weaker hardware. @type {number} */
+    CANVAS_RENDER_THROTTLE_MS: 16,
+    /** Period of the trail/aircraft reclamation pass, ms. @type {number} */
     MEMORY_CLEANUP_INTERVAL_MS: 30000,
     
-    // Trail Settings
+    // ---- Trails --------------------------------------------------------
+    /** Maximum stored positions per aircraft trail. @type {number} */
     MAX_TRAIL_LENGTH: 100,
+    /** Age at which a trail segment fades out completely, minutes. @type {number} */
     TRAIL_FADE_TIME_MINUTES: 5,
+    /** Segment count for gradient trails. @type {number} */
     TRAIL_GRADIENT_SEGMENTS: 40,
+    /** Position smoothing weight, 0–1. @type {number} */
     SMOOTHING_FACTOR: 0.3,
     
-    // Display Settings
+    // ---- Display -------------------------------------------------------
+    /** Margin between the outer ring and the canvas edge, px. Leaves room
+     * for the compass labels. @type {number} */
     CANVAS_PADDING: 40,
+    /** Half-height of an aircraft symbol, px. @type {number} */
     AIRCRAFT_SYMBOL_SIZE: 3,
+    /** Length of the heading line, px. @type {number} */
     HEADING_LINE_LENGTH: 10,
+    /** How far ahead speed vectors project, minutes. @type {number} */
     VECTOR_MINUTES: 2,
+    /** Click tolerance when selecting an aircraft, px. @type {number} */
     CLICK_RADIUS_PX: 15,
     
-    // Range Settings
+    // ---- Range limits --------------------------------------------------
+    /** Closest selectable range, nautical miles. @type {number} */
     MIN_RANGE_NM: 5,
+    /** Widest selectable range, nautical miles. @type {number} */
     MAX_RANGE_NM: 500,
+    /** Range change per zoom step, nautical miles. @type {number} */
     RANGE_STEP_NM: 5,
     
-    // UI Settings
+    // ---- UI ------------------------------------------------------------
+    /** Minimum width of the resizable side panel, px. @type {number} */
     MIN_PANEL_WIDTH: 250,
+    /** How long an emergency banner stays up, ms. @type {number} */
     ALERT_DURATION_MS: 6000,
     
-    // Emergency Settings
+    // ---- Emergency -----------------------------------------------------
+    /**
+     * Squawk codes that trigger a visual and audible alert:
+     * 7500 unlawful interference, 7600 radio failure, 7700 general emergency.
+     * @type {Array<string>}
+     */
     EMERGENCY_SQUAWKS: ['7500', '7600', '7700'],
     
-    // Airport Display Settings
+    // ---- Airport / navaid layer ----------------------------------------
+    /**
+     * Rendering parameters for the static geographic layer.
+     * @namespace CONFIG.AIRPORT_DISPLAY
+     * @property {number} SYMBOL_SIZE Airport circle radius, px.
+     * @property {number} NAVAID_SYMBOL_SIZE Navaid symbol radius, px.
+     * @property {number} LABEL_FONT_SIZE Airport label size, px.
+     * @property {number} RUNWAY_LINE_WIDTH Runway stroke width, px.
+     * @property {number} MAX_AIRPORTS_DISPLAY Cap on airports (and navaids)
+     *   drawn at once, so a dense area cannot flood the scope.
+     * @property {number} MIN_RUNWAY_LENGTH_FT Runways shorter than this are
+     *   never loaded, which keeps grass strips off the display.
+     */
     AIRPORT_DISPLAY: {
         SYMBOL_SIZE: 6,
         NAVAID_SYMBOL_SIZE: 4,

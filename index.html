@@ -272,6 +272,107 @@ GNU General Public License for more details.
                 </div>
                 
                 <div>
+                    <h3 class="font-bold mb-2">Moving Receiver</h3>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" id="position-file-enabled">
+                        <span>Track home position from a POSITION file</span>
+                    </label>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        <div>
+                            <label class="block text-sm">POSITION file path:</label>
+                            <input type="text" id="position-file-path" placeholder="POSITION" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                        <div>
+                            <label class="block text-sm">Poll interval (ms):</label>
+                            <input type="number" id="position-poll-interval" min="250" max="60000" step="250" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <label class="block text-sm">Re-project after moving (nm):</label>
+                        <input type="number" id="position-min-move" min="0" max="5" step="0.001" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                    </div>
+                    <label class="flex items-center gap-2 mt-2">
+                        <input type="checkbox" id="show-own-ship">
+                        <span>Draw own-ship marker at scope centre</span>
+                    </label>
+                    <div id="position-file-status" class="mt-2 text-sm" style="color: var(--color-text-muted);">
+                        Disabled — the home position above is used.
+                    </div>
+                    <div class="mt-1 text-sm" style="color: var(--color-text-muted);">
+                        Accepts &quot;lat, lon&quot;, KEY=VALUE lines, JSON, or NMEA GGA/RMC sentences.
+                        While enabled the Home Position fields above are read-only.
+                    </div>
+                </div>
+
+                <div>
+                    <h3 class="font-bold mb-2">Display</h3>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" id="show-label-details">
+                        <span>Extended aircraft labels (altitude, speed, heading, squawk)</span>
+                    </label>
+                    <div class="grid grid-cols-3 gap-2 mt-2">
+                        <div>
+                            <label class="block text-sm">Symbol size (px):</label>
+                            <input type="number" id="aircraft-symbol-size" min="1" max="12" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                        <div>
+                            <label class="block text-sm">Heading line (px):</label>
+                            <input type="number" id="heading-line-length" min="0" max="60" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                        <div>
+                            <label class="block text-sm">Vector look-ahead (min):</label>
+                            <input type="number" id="vector-minutes" min="0" max="30" step="0.5" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 class="font-bold mb-2">Theme</h3>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-sm">Interface theme:</label>
+                            <select id="settings-ui-theme" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);"></select>
+                        </div>
+                        <div>
+                            <label class="block text-sm">Scope theme:</label>
+                            <select id="settings-scope-theme" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);"></select>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 class="font-bold mb-2">Performance</h3>
+                    <div class="grid grid-cols-3 gap-2">
+                        <div>
+                            <label class="block text-sm">Sweep duration (s):</label>
+                            <input type="number" id="sweep-duration" min="0" max="30" step="0.1" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                        <div>
+                            <label class="block text-sm">Frame interval (ms):</label>
+                            <input type="number" id="render-throttle" min="8" max="200" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                        <div>
+                            <label class="block text-sm">Panel refresh (ms):</label>
+                            <input type="number" id="ui-update-interval" min="100" max="5000" step="50" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        <div>
+                            <label class="block text-sm">Max airports/navaids drawn:</label>
+                            <input type="number" id="max-airports-display" min="1" max="500" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                        <div>
+                            <label class="block text-sm">Position smoothing (0-0.9):</label>
+                            <input type="number" id="smoothing-factor" min="0" max="0.9" step="0.05" class="w-full px-2 py-1 border" style="background-color: var(--color-bg-primary); border-color: var(--color-border);">
+                        </div>
+                    </div>
+                    <div class="mt-2 text-sm" style="color: var(--color-text-muted);">
+                        16 ms frame interval is ~60 fps; 32 ms is ~30 fps. Sweep duration
+                        also sets how long a silent aircraft is kept on the scope.
+                    </div>
+                </div>
+
+                <div>
                     <h3 class="font-bold mb-2">Trail Settings</h3>
                     <div class="grid grid-cols-3 gap-2">
                         <div>
